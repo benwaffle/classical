@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import Image from "next/image";
 
 interface Track {
   id: string;
@@ -48,7 +49,7 @@ export function LikedSongs({ onPlayTrack }: LikedSongsProps) {
           }
 
           // Create new store with track.id as key
-          const store = db.createObjectStore("likedSongs", { keyPath: "track.id" });
+          db.createObjectStore("likedSongs", { keyPath: "track.id" });
 
           // Create metadata store
           if (!db.objectStoreNames.contains("metadata")) {
@@ -67,7 +68,7 @@ export function LikedSongs({ onPlayTrack }: LikedSongsProps) {
         const metaStore = metaTx.objectStore("metadata");
         const metaRequest = metaStore.get("lastFetch");
 
-        const metadata = await new Promise<any>((resolve) => {
+        const metadata = await new Promise<{ timestamp: number; total: number } | null>((resolve) => {
           metaRequest.onsuccess = () => resolve(metaRequest.result);
           metaRequest.onerror = () => resolve(null);
         });
@@ -203,10 +204,12 @@ export function LikedSongs({ onPlayTrack }: LikedSongsProps) {
             className="w-full flex items-center gap-3 p-2 rounded bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors text-left cursor-pointer"
           >
             {track.album.images[0] && (
-              <img
+              <Image
                 src={track.album.images[0].url}
                 alt={track.album.name}
-                className="w-10 h-10 rounded"
+                width={40}
+                height={40}
+                className="rounded"
               />
             )}
             <div className="flex-1 min-w-0">

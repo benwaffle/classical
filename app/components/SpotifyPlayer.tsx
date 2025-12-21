@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import Image from "next/image";
 
 interface Track {
   id: string;
@@ -18,22 +19,42 @@ interface SpotifyPlayerProps {
   currentTrack: Track | null;
 }
 
+interface SpotifyPlayer {
+  connect: () => Promise<boolean>;
+  disconnect: () => void;
+  addListener: (event: string, callback: (data: unknown) => void) => void;
+  togglePlay: () => Promise<void>;
+}
+
+interface SpotifySDK {
+  Player: new (config: {
+    name: string;
+    getOAuthToken: (cb: (token: string) => void) => void;
+    volume: number;
+  }) => SpotifyPlayer;
+}
+
 declare global {
   interface Window {
     onSpotifyWebPlaybackSDKReady: () => void;
-    Spotify: any;
+    Spotify: SpotifySDK;
   }
 }
 
 export function SpotifyPlayer({ accessToken, currentTrack }: SpotifyPlayerProps) {
-  const [player, setPlayer] = useState<any>(null);
+  const [player, setPlayer] = useState<SpotifyPlayer | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isPaused, setIsPaused] = useState(true);
-  const [playbackState, setPlaybackState] = useState<any>(null);
+  const [playbackState, setPlaybackState] = useState<{
+    paused: boolean;
+    position: number;
+    duration: number;
+    track_window?: { current_track?: Track };
+  } | null>(null);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
-  const playerRef = useRef<any>(null);
+  const playerRef = useRef<SpotifyPlayer | null>(null);
 
   useEffect(() => {
     const script = document.createElement("script");
@@ -60,15 +81,17 @@ export function SpotifyPlayer({ accessToken, currentTrack }: SpotifyPlayerProps)
         console.log("Device ID has gone offline", device_id);
       });
 
-      spotifyPlayer.addListener("player_state_changed", (state: any) => {
+      spotifyPlayer.addListener("player_state_changed", (state: unknown) => {
         if (!state) {
           setPlaybackState(null);
           return;
         }
-        setIsPaused(state.paused);
-        setPlaybackState(state);
-        setProgress(state.position);
-        setDuration(state.duration);
+        const playbackData = state as { paused: boolean; position: number; duration: number; track_window?: { current_track?: Track } };
+        console.log('player_state_changed', state);
+        setIsPaused(playbackData.paused);
+        setPlaybackState(playbackData);
+        setProgress(playbackData.position);
+        setDuration(playbackData.duration);
       });
 
       spotifyPlayer.connect();
@@ -84,10 +107,31 @@ export function SpotifyPlayer({ accessToken, currentTrack }: SpotifyPlayerProps)
   }, [accessToken]);
 
   useEffect(() => {
-    if (currentTrack && deviceId && isReady) {
-      playTrack(currentTrack.uri);
-    }
-  }, [currentTrack, deviceId, isReady]);
+    if (!currentTrack || !deviceId || !isReady) return;
+
+    const playTrack = async () => {
+      try {
+        const response = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            uris: [currentTrack.uri],
+          }),
+        });
+
+        if (response.ok) {
+          setIsPaused(false);
+        }
+      } catch (error) {
+        console.error("Error playing track:", error);
+      }
+    };
+
+    playTrack();
+  }, [currentTrack, deviceId, isReady, accessToken]);
 
   // Update progress while playing (for smooth progress bar)
   useEffect(() => {
@@ -102,29 +146,6 @@ export function SpotifyPlayer({ accessToken, currentTrack }: SpotifyPlayerProps)
 
     return () => clearInterval(interval);
   }, [isPaused, duration]);
-
-  const playTrack = async (uri: string) => {
-    if (!deviceId) return;
-
-    try {
-      const response = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          uris: [uri],
-        }),
-      });
-
-      if (response.ok) {
-        setIsPaused(false);
-      }
-    } catch (error) {
-      console.error("Error playing track:", error);
-    }
-  };
 
   const togglePlay = () => {
     if (!player) return;
@@ -150,10 +171,12 @@ export function SpotifyPlayer({ accessToken, currentTrack }: SpotifyPlayerProps)
           {displayTrack ? (
             <>
               {(displayTrack.album?.images?.[0]?.url || displayTrack.album?.images?.[0]) && (
-                <img
+                <Image
                   src={displayTrack.album.images[0].url || displayTrack.album.images[0]}
                   alt={displayTrack.album?.name || "Album"}
-                  className="w-14 h-14 rounded"
+                  width={56}
+                  height={56}
+                  className="rounded"
                 />
               )}
               <div className="flex-1 min-w-0">
@@ -161,7 +184,7 @@ export function SpotifyPlayer({ accessToken, currentTrack }: SpotifyPlayerProps)
                   {displayTrack.name}
                 </p>
                 <p className="text-xs text-zinc-400 truncate">
-                  {displayTrack.artists?.map((a: any) => a.name).join(", ")}
+                  {displayTrack.artists?.map((a: { name: string }) => a.name).join(", ")}
                 </p>
               </div>
               <button
