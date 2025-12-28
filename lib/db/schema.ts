@@ -126,7 +126,7 @@ export const composer = sqliteTable("composer", {
   birthYear: integer("birth_year"),
   deathYear: integer("death_year"),
   biography: text("biography"),
-  spotifyArtistId: text("spotify_artist_id"),
+  spotifyArtistId: text("spotify_artist_id").unique().references(() => spotifyArtist.spotifyId),
 });
 
 export const work = sqliteTable(
@@ -187,19 +187,16 @@ export const recording = sqliteTable(
   ]
 );
 
-export const spotifyTrack = sqliteTable(
-  "spotify_track",
-  {
-    spotifyId: text("spotify_id").primaryKey(),
-    title: text("title").notNull(),
-    recordingId: text("recording_id")
-      .notNull()
-      .references(() => recording.id),
-    durationMs: integer("duration_ms").notNull(),
-    popularity: integer("popularity"),
-  },
-  (table) => [index("track_recording_idx").on(table.recordingId)],
-);
+export const spotifyTrack = sqliteTable("spotify_track", {
+  spotifyId: text("spotify_id").primaryKey(),
+  title: text("title").notNull(),
+  trackNumber: integer("track_number").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  popularity: integer("popularity"),
+  spotifyAlbumId: text("spotify_album_id")
+    .notNull()
+    .references(() => spotifyAlbum.spotifyId),
+});
 
 export const spotifyArtist = sqliteTable("spotify_artist", {
   spotifyId: text("spotify_id").primaryKey(),
@@ -255,8 +252,12 @@ export const matchQueue = sqliteTable("match_queue", {
  * Classical Music Relations
  */
 
-export const composerRelations = relations(composer, ({ many }) => ({
+export const composerRelations = relations(composer, ({ one, many }) => ({
   works: many(work),
+  spotifyArtist: one(spotifyArtist, {
+    fields: [composer.spotifyArtistId],
+    references: [spotifyArtist.spotifyId],
+  }),
 }));
 
 export const workRelations = relations(work, ({ one, many }) => ({
@@ -295,17 +296,21 @@ export const recordingRelations = relations(recording, ({ one, many }) => ({
 export const spotifyTrackRelations = relations(
   spotifyTrack,
   ({ one, many }) => ({
-    recording: one(recording, {
-      fields: [spotifyTrack.recordingId],
-      references: [recording.id],
+    album: one(spotifyAlbum, {
+      fields: [spotifyTrack.spotifyAlbumId],
+      references: [spotifyAlbum.spotifyId],
     }),
     trackArtists: many(trackArtists),
     trackMovements: many(trackMovement),
   }),
 );
 
-export const spotifyArtistRelations = relations(spotifyArtist, ({ many }) => ({
+export const spotifyArtistRelations = relations(spotifyArtist, ({ one, many }) => ({
   trackArtists: many(trackArtists),
+  composer: one(composer, {
+    fields: [spotifyArtist.spotifyId],
+    references: [composer.spotifyArtistId],
+  }),
 }));
 
 export const trackArtistsRelations = relations(trackArtists, ({ one }) => ({

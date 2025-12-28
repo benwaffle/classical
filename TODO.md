@@ -1,0 +1,1 @@
+- [ ] don't pass whole spotify api url to /api/spotify/liked-songs
