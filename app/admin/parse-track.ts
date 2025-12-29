@@ -5,6 +5,7 @@ import { z } from "zod";
 
 const classicalMetadataSchema = z.object({
   isClassical: z.boolean(),
+  composerName: z.string().nullable().describe("The name of the composer (e.g. 'Johann Sebastian Bach', 'Wolfgang Amadeus Mozart'). Should match one of the artist names provided. Null if not classical or unknown"),
   formalName: z.string().describe("The formal title of the entire work, e.g. 'Piano Concerto No. 3 in D minor', excluding catalog numbers or movement names"),
   nickname: z.string().nullable().describe("Popular nickname like 'Moonlight Sonata', null if none"),
   catalogSystem: z.string().nullable().describe("Catalog system: Op, RV, BWV, K, Kk, Hob, D, S, etc. Null if not classical or no catalog number"),
@@ -40,4 +41,24 @@ export async function parseTrackMetadata(trackName: string, artistNames?: string
   console.log("AI Response:", JSON.stringify(output, null, 2));
 
   return output;
+}
+
+export async function parseBatchTrackMetadata(
+  tracks: Array<{ trackName: string; artistNames: string[] }>
+): Promise<ClassicalMetadata[]> {
+  // Process tracks in parallel (but limit concurrency to avoid rate limits)
+  const batchSize = 10;
+  const results: ClassicalMetadata[] = [];
+
+  for (let i = 0; i < tracks.length; i += batchSize) {
+    const batch = tracks.slice(i, i + batchSize);
+    const batchPromises = batch.map(({ trackName, artistNames }) =>
+      parseTrackMetadata(trackName, artistNames)
+    );
+
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+  }
+
+  return results;
 }

@@ -5,6 +5,7 @@ import {
   integer,
   index,
   primaryKey,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 /*
@@ -121,7 +122,7 @@ export const accountRelations = relations(account, ({ one }) => ({
  */
 
 export const composer = sqliteTable("composer", {
-  id: text("id").primaryKey(), // slug: "bach", "mozart"
+  id: integer("id").primaryKey(),
   name: text("name").notNull(),
   birthYear: integer("birth_year"),
   deathYear: integer("death_year"),
@@ -132,31 +133,44 @@ export const composer = sqliteTable("composer", {
 export const work = sqliteTable(
   "work",
   {
-    id: text("id").primaryKey(), // "bach/bwv-1052"
-    composerId: text("composer_id")
+    id: integer("id").primaryKey(),
+    composerId: integer("composer_id")
       .notNull()
       .references(() => composer.id),
     title: text("title").notNull(),
     nickname: text("nickname"), // "moonlight", "spring"
-    catalogSystem: text("catalog_system").notNull(), // "BWV", "K", "Op"
-    catalogNumber: text("catalog_number").notNull(), // "1052", "27/2"
+    catalogSystem: text("catalog_system"), // "BWV", "K", "Op" - nullable for works without catalog numbers
+    catalogNumber: text("catalog_number"), // "1052", "27/2" - nullable for works without catalog numbers
     yearComposed: integer("year_composed"),
     form: text("form"), // "concerto", "sonata", "fugue"
   },
-  (table) => [index("work_composer_idx").on(table.composerId)],
+  (table) => [
+    index("work_composer_idx").on(table.composerId),
+    // For works WITH catalog numbers: unique by composer + catalog
+    uniqueIndex("work_composer_catalog_idx")
+      .on(table.composerId, table.catalogSystem, table.catalogNumber)
+      .where(sql`${table.catalogSystem} IS NOT NULL AND ${table.catalogNumber} IS NOT NULL`),
+    // For works WITHOUT catalog numbers: unique by composer + title
+    uniqueIndex("work_composer_title_idx")
+      .on(table.composerId, table.title)
+      .where(sql`${table.catalogSystem} IS NULL AND ${table.catalogNumber} IS NULL`),
+  ],
 );
 
 export const movement = sqliteTable(
   "movement",
   {
-    id: text("id").primaryKey(), // "bach/bwv-1052/1"
-    workId: text("work_id")
+    id: integer("id").primaryKey(),
+    workId: integer("work_id")
       .notNull()
       .references(() => work.id),
     number: integer("number").notNull(),
     title: text("title"), // "Allegro", null
   },
-  (table) => [index("movement_work_idx").on(table.workId)],
+  (table) => [
+    index("movement_work_idx").on(table.workId),
+    uniqueIndex("movement_work_number_idx").on(table.workId, table.number),
+  ],
 );
 
 export const spotifyAlbum = sqliteTable("spotify_album", {
@@ -172,11 +186,11 @@ export const spotifyAlbum = sqliteTable("spotify_album", {
 export const recording = sqliteTable(
   "recording",
   {
-    id: text("id").primaryKey(), // uuid
+    id: integer("id").primaryKey(),
     spotifyAlbumId: text("spotify_album_id")
       .notNull()
       .references(() => spotifyAlbum.spotifyId),
-    workId: text("work_id")
+    workId: integer("work_id")
       .notNull()
       .references(() => work.id),
     popularity: integer("popularity"), // calculated by averaging tracks
@@ -184,6 +198,7 @@ export const recording = sqliteTable(
   (table) => [
     index("recording_work_idx").on(table.workId),
     index("recording_album_idx").on(table.spotifyAlbumId),
+    uniqueIndex("recording_album_work_idx").on(table.spotifyAlbumId, table.workId),
   ]
 );
 
@@ -228,7 +243,7 @@ export const trackMovement = sqliteTable(
     spotifyTrackId: text("spotify_track_id")
       .notNull()
       .references(() => spotifyTrack.spotifyId),
-    movementId: text("movement_id")
+    movementId: integer("movement_id")
       .notNull()
       .references(() => movement.id),
     startMs: integer("start_ms"),

@@ -14,7 +14,88 @@ import {
   recording,
 } from "@/lib/db/schema";
 import { headers } from "next/headers";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, type InferSelectModel } from "drizzle-orm";
+
+// Export types for use in UI components
+export type SpotifyTrackRow = InferSelectModel<typeof spotifyTrack>;
+export type SpotifyAlbumRow = InferSelectModel<typeof spotifyAlbum>;
+export type SpotifyArtistRow = InferSelectModel<typeof spotifyArtist>;
+export type ComposerRow = InferSelectModel<typeof composer>;
+export type WorkRow = InferSelectModel<typeof work>;
+export type MovementRow = InferSelectModel<typeof movement>;
+export type TrackMovementRow = InferSelectModel<typeof trackMovement>;
+export type RecordingRow = InferSelectModel<typeof recording>;
+
+// Spotify API response types
+interface SpotifyImage {
+  url: string;
+  width: number;
+  height: number;
+}
+
+interface SpotifyApiArtist {
+  id: string;
+  name: string;
+  uri: string;
+}
+
+interface SpotifyApiAlbum {
+  id: string;
+  name: string;
+  uri: string;
+  release_date: string;
+  popularity: number;
+  images: SpotifyImage[];
+}
+
+interface SpotifyApiTrack {
+  id: string;
+  name: string;
+  uri: string;
+  duration_ms: number;
+  track_number: number;
+  popularity: number;
+  artists: SpotifyApiArtist[];
+  album: SpotifyApiAlbum;
+}
+
+// Return type for getBatchTrackMetadata
+export interface TrackMetadata {
+  id: string;
+  name: string;
+  uri: string;
+  duration_ms: number;
+  track_number: number;
+  popularity: number;
+  inSpotifyTracksTable: boolean;
+  artists: Array<{
+    id: string;
+    name: string;
+    uri: string;
+    inSpotifyArtistsTable: boolean;
+    inComposersTable: boolean;
+    composerId?: number;
+  }>;
+  album: {
+    id: string;
+    name: string;
+    uri: string;
+    release_date: string;
+    popularity: number;
+    images: SpotifyImage[];
+    inSpotifyAlbumsTable: boolean;
+  };
+  dbData: {
+    track: SpotifyTrackRow | null;
+    album: SpotifyAlbumRow | null;
+    artists: SpotifyArtistRow[];
+    composers: ComposerRow[];
+    trackMovements: TrackMovementRow[];
+    movements: MovementRow[];
+    works: WorkRow[];
+    recordings: RecordingRow[];
+  };
+}
 
 async function checkAuth() {
   const session = await auth.api.getSession({
@@ -215,24 +296,36 @@ export async function addComposer(spotifyArtistId: string, name: string) {
   try {
     const { composer } = await import("@/lib/db/schema");
 
-    // Create a slug from the name
-    const id = name
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, "")
-      .replace(/\s+/g, "-")
-      .replace(/-+/g, "-")
-      .trim();
+    // Check if composer already exists by spotifyArtistId
+    const [existing] = await db
+      .select()
+      .from(composer)
+      .where(eq(composer.spotifyArtistId, spotifyArtistId))
+      .limit(1);
 
-    await db.insert(composer).values({
-      id,
+    if (existing) {
+      return {
+        success: true,
+        composer: {
+          id: existing.id,
+          name: existing.name,
+          spotifyArtistId: existing.spotifyArtistId,
+        },
+      };
+    }
+
+    // Insert new composer
+    const result = await db.insert(composer).values({
       name,
       spotifyArtistId,
-    });
+    }).returning({ id: composer.id });
+
+    const insertedId = result[0].id;
 
     return {
       success: true,
       composer: {
-        id,
+        id: insertedId,
         name,
         spotifyArtistId,
       },
@@ -244,25 +337,37 @@ export async function addComposer(spotifyArtistId: string, name: string) {
 }
 
 export async function checkWorkAndMovement(
-  composerId: string,
-  catalogSystem: string,
-  catalogNumber: string,
+  composerId: number,
+  catalogSystem: string | null,
+  catalogNumber: string | null,
   movementNumber: number
 ) {
   await checkAuth();
 
   try {
     // Find work by composer and catalog number
-    const works = await db
-      .select()
-      .from(work)
-      .where(
-        and(
-          eq(work.composerId, composerId),
-          eq(work.catalogSystem, catalogSystem),
-          eq(work.catalogNumber, catalogNumber)
-        )
-      );
+    let works;
+    if (catalogSystem && catalogNumber) {
+      works = await db
+        .select()
+        .from(work)
+        .where(
+          and(
+            eq(work.composerId, composerId),
+            eq(work.catalogSystem, catalogSystem),
+            eq(work.catalogNumber, catalogNumber)
+          )
+        );
+    } else {
+      // If no catalog info, we can't reliably find existing works
+      // Return that it doesn't exist (will create new)
+      return {
+        workExists: false,
+        movementExists: false,
+        work: null,
+        movement: null,
+      };
+    }
 
     const existingWork = works[0] || null;
 
@@ -301,11 +406,11 @@ export async function checkWorkAndMovement(
 }
 
 export async function addWorkMovementAndTrack(data: {
-  composerId: string;
+  composerId: number;
   formalName: string;
   nickname: string | null;
-  catalogSystem: string;
-  catalogNumber: string;
+  catalogSystem: string | null;
+  catalogNumber: string | null;
   key: string | null;
   form: string | null;
   movementNumber: number;
@@ -317,67 +422,131 @@ export async function addWorkMovementAndTrack(data: {
   await checkAuth();
 
   try {
-    // Create work ID slug
-    const workId = `${data.composerId}/${data.catalogSystem.toLowerCase()}-${data.catalogNumber}`;
+    // Upsert work and get its ID
+    // Query first to find existing work, then insert or update
+    let workId: number;
+    let existingWork;
 
-    // Upsert work
-    await db
-      .insert(work)
-      .values({
-        id: workId,
-        composerId: data.composerId,
-        title: data.formalName,
-        nickname: data.nickname,
-        catalogSystem: data.catalogSystem,
-        catalogNumber: data.catalogNumber,
-        yearComposed: data.yearComposed,
-        form: data.form,
-      })
-      .onConflictDoUpdate({
-        target: work.id,
-        set: {
+    if (data.catalogSystem && data.catalogNumber) {
+      // Works WITH catalog numbers: find by (composerId, catalogSystem, catalogNumber)
+      [existingWork] = await db
+        .select()
+        .from(work)
+        .where(
+          and(
+            eq(work.composerId, data.composerId),
+            eq(work.catalogSystem, data.catalogSystem),
+            eq(work.catalogNumber, data.catalogNumber)
+          )
+        )
+        .limit(1);
+    } else {
+      // Works WITHOUT catalog numbers: find by (composerId, title)
+      [existingWork] = await db
+        .select()
+        .from(work)
+        .where(
+          and(
+            eq(work.composerId, data.composerId),
+            eq(work.title, data.formalName)
+          )
+        )
+        .limit(1);
+    }
+
+    if (existingWork) {
+      // Update existing work
+      await db
+        .update(work)
+        .set({
           title: data.formalName,
           nickname: data.nickname,
           catalogSystem: data.catalogSystem,
           catalogNumber: data.catalogNumber,
           yearComposed: data.yearComposed,
           form: data.form,
-        },
-      });
+        })
+        .where(eq(work.id, existingWork.id));
+      workId = existingWork.id;
+    } else {
+      // Insert new work
+      const workResult = await db
+        .insert(work)
+        .values({
+          composerId: data.composerId,
+          title: data.formalName,
+          nickname: data.nickname,
+          catalogSystem: data.catalogSystem,
+          catalogNumber: data.catalogNumber,
+          yearComposed: data.yearComposed,
+          form: data.form,
+        })
+        .returning({ id: work.id });
+      workId = workResult[0].id;
+    }
 
-    // Create movement ID
-    const movementId = `${workId}/${data.movementNumber}`;
+    // Upsert movement and get its ID
+    let movementId: number;
+    const [existingMovement] = await db
+      .select()
+      .from(movement)
+      .where(
+        and(
+          eq(movement.workId, workId),
+          eq(movement.number, data.movementNumber)
+        )
+      )
+      .limit(1);
 
-    // Upsert movement
-    await db
-      .insert(movement)
-      .values({
-        id: movementId,
-        workId,
-        number: data.movementNumber,
-        title: data.movementName,
-      })
-      .onConflictDoUpdate({
-        target: movement.id,
-        set: {
+    if (existingMovement) {
+      // Update existing movement
+      await db
+        .update(movement)
+        .set({
+          title: data.movementName,
+        })
+        .where(eq(movement.id, existingMovement.id));
+      movementId = existingMovement.id;
+    } else {
+      // Insert new movement
+      const movementResult = await db
+        .insert(movement)
+        .values({
+          workId,
           number: data.movementNumber,
           title: data.movementName,
-        },
-      });
+        })
+        .returning({ id: movement.id });
+      movementId = movementResult[0].id;
+    }
 
-    // Create recording ID
-    const recordingId = `${data.spotifyAlbumId}/${workId}`;
+    // Upsert recording (links album to work) and get its ID
+    let recordingId: number;
+    const [existingRecording] = await db
+      .select()
+      .from(recording)
+      .where(
+        and(
+          eq(recording.spotifyAlbumId, data.spotifyAlbumId),
+          eq(recording.workId, workId)
+        )
+      )
+      .limit(1);
 
-    // Upsert recording (links album to work)
-    await db
-      .insert(recording)
-      .values({
-        id: recordingId,
-        spotifyAlbumId: data.spotifyAlbumId,
-        workId,
-        popularity: null, // Will be calculated later by averaging tracks
-      })
-      .onConflictDoNothing();
+    if (existingRecording) {
+      recordingId = existingRecording.id;
+    } else {
+      // Insert new recording
+      const recordingResult = await db
+        .insert(recording)
+        .values({
+          spotifyAlbumId: data.spotifyAlbumId,
+          workId,
+          popularity: null, // Will be calculated later by averaging tracks
+        })
+        .returning({ id: recording.id });
+      recordingId = recordingResult[0].id;
+    }
 
     // Upsert track-movement relationship
     await db
@@ -401,6 +570,233 @@ export async function addWorkMovementAndTrack(data: {
     console.error("Error adding work, movement, and track:", error);
     throw new Error("Failed to add work, movement, and track");
   }
+}
+
+export async function deleteTrackMetadata(spotifyTrackId: string) {
+  await checkAuth();
+
+  try {
+    // Only remove the track-movement relationship for this specific track.
+    // The work/movement/recording data remains intact and can be reused by other tracks/recordings.
+    // This allows re-analyzing this track without affecting other tracks that share the same work.
+
+    await db.delete(trackMovement).where(eq(trackMovement.spotifyTrackId, spotifyTrackId));
+
+    return {
+      success: true,
+      message: "Track-movement link removed, ready for re-analysis",
+    };
+  } catch (error) {
+    console.error("Error removing track-movement link:", error);
+    throw new Error("Failed to remove track-movement link");
+  }
+}
+
+export async function getBatchTrackMetadata(trackUris: string[]) {
+  const session = await checkAuth();
+
+  // Extract track IDs from URIs
+  const trackIds: string[] = [];
+  for (const trackUri of trackUris) {
+    let trackId: string | null = null;
+
+    // Try URI format first
+    const uriMatch = trackUri.match(/spotify:track:([a-zA-Z0-9]+)/);
+    if (uriMatch) {
+      trackId = uriMatch[1];
+    } else {
+      // Try URL format
+      const urlMatch = trackUri.match(/open\.spotify\.com\/track\/([a-zA-Z0-9]+)/);
+      if (urlMatch) {
+        trackId = urlMatch[1];
+      }
+    }
+
+    if (trackId) {
+      trackIds.push(trackId);
+    }
+  }
+
+  if (trackIds.length === 0) {
+    throw new Error("No valid track URIs found");
+  }
+
+  // Get Spotify access token
+  const accessToken = await getSpotifyAccessToken(session.user.id);
+
+  // Fetch tracks in batches of 50 (Spotify API limit)
+  const batchSize = 50;
+  const allTrackData: SpotifyApiTrack[] = [];
+
+  for (let i = 0; i < trackIds.length; i += batchSize) {
+    const batchIds = trackIds.slice(i, i + batchSize);
+    const response = await fetch(
+      `https://api.spotify.com/v1/tracks?ids=${batchIds.join(',')}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || "Failed to fetch tracks from Spotify");
+    }
+
+    const data = await response.json();
+    allTrackData.push(...data.tracks);
+  }
+
+  // Get all unique artist IDs and album IDs
+  const artistIds = [...new Set(allTrackData.flatMap((track) => track.artists.map((a) => a.id)))];
+  const albumIds = [...new Set(allTrackData.map((track) => track.album.id))];
+
+  // Check database for existing data
+  const [existingSpotifyArtists, existingComposers, existingAlbums, existingTracks] = await Promise.all([
+    artistIds.length > 0
+      ? db
+          .select()
+          .from(spotifyArtist)
+          .where(inArray(spotifyArtist.spotifyId, artistIds))
+      : [],
+    artistIds.length > 0
+      ? db
+          .select()
+          .from(composer)
+          .where(inArray(composer.spotifyArtistId, artistIds))
+      : [],
+    albumIds.length > 0
+      ? db
+          .select()
+          .from(spotifyAlbum)
+          .where(inArray(spotifyAlbum.spotifyId, albumIds))
+      : [],
+    trackIds.length > 0
+      ? db
+          .select()
+          .from(spotifyTrack)
+          .where(inArray(spotifyTrack.spotifyId, trackIds))
+      : [],
+  ]);
+
+  const spotifyArtistMap = new Map(
+    existingSpotifyArtists.map((a) => [a.spotifyId, a])
+  );
+  const composerMap = new Map(
+    existingComposers.map((c) => [c.spotifyArtistId, c])
+  );
+  const albumMap = new Map(
+    existingAlbums.map((a) => [a.spotifyId, a])
+  );
+  const trackMap = new Map(
+    existingTracks.map((t) => [t.spotifyId, t])
+  );
+
+  // For tracks that exist, fetch their full database info
+  const existingTrackIds = existingTracks.map((t) => t.spotifyId);
+  let trackMovementsData: TrackMovementRow[] = [];
+  let movementsData: MovementRow[] = [];
+  let worksData: WorkRow[] = [];
+  let composersData: ComposerRow[] = [];
+  let recordingsData: RecordingRow[] = [];
+
+  if (existingTrackIds.length > 0) {
+    const trackMovementRecords = await db
+      .select()
+      .from(trackMovement)
+      .where(inArray(trackMovement.spotifyTrackId, existingTrackIds));
+
+    if (trackMovementRecords.length > 0) {
+      trackMovementsData = trackMovementRecords;
+
+      const movementIds = trackMovementRecords.map((tm) => tm.movementId);
+      movementsData = await db
+        .select()
+        .from(movement)
+        .where(inArray(movement.id, movementIds));
+
+      const workIds = movementsData.map((m) => m.workId);
+      if (workIds.length > 0) {
+        worksData = await db
+          .select()
+          .from(work)
+          .where(inArray(work.id, workIds));
+
+        const composerIds = worksData.map((w) => w.composerId);
+        if (composerIds.length > 0) {
+          composersData = await db
+            .select()
+            .from(composer)
+            .where(inArray(composer.id, composerIds));
+        }
+
+        recordingsData = await db
+          .select()
+          .from(recording)
+          .where(inArray(recording.workId, workIds));
+      }
+    }
+  }
+
+  // Build result objects
+  return allTrackData.map((trackData): TrackMetadata => ({
+    id: trackData.id,
+    name: trackData.name,
+    uri: trackData.uri,
+    duration_ms: trackData.duration_ms,
+    track_number: trackData.track_number,
+    popularity: trackData.popularity,
+    inSpotifyTracksTable: trackMap.has(trackData.id),
+    artists: trackData.artists.map((artist) => ({
+      id: artist.id,
+      name: artist.name,
+      uri: artist.uri,
+      inSpotifyArtistsTable: spotifyArtistMap.has(artist.id),
+      inComposersTable: composerMap.has(artist.id),
+      composerId: composerMap.get(artist.id)?.id,
+    })),
+    album: {
+      id: trackData.album.id,
+      name: trackData.album.name,
+      uri: trackData.album.uri,
+      release_date: trackData.album.release_date,
+      popularity: trackData.album.popularity,
+      images: trackData.album.images,
+      inSpotifyAlbumsTable: albumMap.has(trackData.album.id),
+    },
+    dbData: {
+      track: trackMap.get(trackData.id) || null,
+      album: albumMap.get(trackData.album.id) || null,
+      artists: existingSpotifyArtists.filter((a) =>
+        trackData.artists.some((ta) => ta.id === a.spotifyId)
+      ),
+      composers: composersData.filter((c) =>
+        trackMovementsData.some((tm) => {
+          const mvmt = movementsData.find((m) => m.id === tm.movementId);
+          const wrk = mvmt && worksData.find((w) => w.id === mvmt.workId);
+          return wrk && wrk.composerId === c.id && tm.spotifyTrackId === trackData.id;
+        })
+      ),
+      trackMovements: trackMovementsData.filter((tm) => tm.spotifyTrackId === trackData.id),
+      movements: movementsData.filter((m) =>
+        trackMovementsData.some((tm) => tm.movementId === m.id && tm.spotifyTrackId === trackData.id)
+      ),
+      works: worksData.filter((w) =>
+        movementsData.some((m) => {
+          const tm = trackMovementsData.find((t) => t.movementId === m.id && t.spotifyTrackId === trackData.id);
+          return tm && m.workId === w.id;
+        })
+      ),
+      recordings: recordingsData.filter((r) =>
+        worksData.some((w) => {
+          const mvmt = movementsData.find((m) => m.workId === w.id);
+          const tm = mvmt && trackMovementsData.find((t) => t.movementId === mvmt.id && t.spotifyTrackId === trackData.id);
+          return tm && r.workId === w.id;
+        })
+      ),
+    },
+  }));
 }
 
 export async function getTrackMetadata(trackUri: string) {
@@ -448,10 +844,10 @@ export async function getTrackMetadata(trackUri: string) {
       throw new Error(errorData.error?.message || "Failed to fetch track from Spotify");
     }
 
-    const trackData = await response.json();
+    const trackData: SpotifyApiTrack = await response.json();
 
     // Check if artists, album, and track exist in database
-    const artistIds = trackData.artists.map((a: any) => a.id);
+    const artistIds = trackData.artists.map((a) => a.id);
 
     const [existingSpotifyArtists, existingComposers, existingAlbum, existingTrack] = await Promise.all([
       db
@@ -480,11 +876,11 @@ export async function getTrackMetadata(trackUri: string) {
     );
 
     // Fetch track movements and related data if track exists
-    let trackMovements: any[] = [];
-    let movementsData: any[] = [];
-    let worksData: any[] = [];
-    let composersData: any[] = [];
-    let recordingsData: any[] = [];
+    let trackMovementsData: TrackMovementRow[] = [];
+    let movementsData: MovementRow[] = [];
+    let worksData: WorkRow[] = [];
+    let composersData: ComposerRow[] = [];
+    let recordingsData: RecordingRow[] = [];
 
     if (existingTrack.length > 0) {
       const trackMovementRecords = await db
@@ -493,7 +889,7 @@ export async function getTrackMetadata(trackUri: string) {
         .where(eq(trackMovement.spotifyTrackId, trackData.id));
 
       if (trackMovementRecords.length > 0) {
-        trackMovements = trackMovementRecords;
+        trackMovementsData = trackMovementRecords;
 
         const movementIds = trackMovementRecords.map((tm) => tm.movementId);
         movementsData = await db
@@ -527,7 +923,7 @@ export async function getTrackMetadata(trackUri: string) {
       }
     }
 
-    return {
+    const result: TrackMetadata = {
       id: trackData.id,
       name: trackData.name,
       uri: trackData.uri,
@@ -535,7 +931,7 @@ export async function getTrackMetadata(trackUri: string) {
       track_number: trackData.track_number,
       popularity: trackData.popularity,
       inSpotifyTracksTable: existingTrack.length > 0,
-      artists: trackData.artists.map((artist: any) => ({
+      artists: trackData.artists.map((artist) => ({
         id: artist.id,
         name: artist.name,
         uri: artist.uri,
@@ -557,12 +953,13 @@ export async function getTrackMetadata(trackUri: string) {
         album: existingAlbum[0] || null,
         artists: existingSpotifyArtists,
         composers: composersData,
-        trackMovements: trackMovements,
+        trackMovements: trackMovementsData,
         movements: movementsData,
         works: worksData,
         recordings: recordingsData,
       },
     };
+    return result;
   } catch (error) {
     console.error("Error fetching track metadata:", error);
     throw new Error("Failed to fetch track metadata");
