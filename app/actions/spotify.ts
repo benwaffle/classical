@@ -2,9 +2,9 @@
 
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { trackMovement } from "@/lib/db/schema";
+import { trackMovement, matchQueue } from "@/lib/db/schema";
 import { headers } from "next/headers";
-import { inArray, eq } from "drizzle-orm";
+import { inArray, eq, sql } from "drizzle-orm";
 
 export async function getSpotifyToken(): Promise<string> {
   const session = await auth.api.getSession({
@@ -80,4 +80,71 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
       composerName: r.composerName,
     },
   }));
+}
+
+export async function submitToMatchQueue(trackIds: string[]): Promise<{ submitted: number }> {
+  if (trackIds.length === 0) return { submitted: 0 };
+
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+
+  if (!session) {
+    throw new Error("Unauthorized");
+  }
+
+  // Filter out tracks already in queue
+  const existing = await db
+    .select({ spotifyId: matchQueue.spotifyId })
+    .from(matchQueue)
+    .where(inArray(matchQueue.spotifyId, trackIds));
+
+  const existingIds = new Set(existing.map((e) => e.spotifyId));
+  const newTrackIds = trackIds.filter((id) => !existingIds.has(id));
+
+  if (newTrackIds.length === 0) return { submitted: 0 };
+
+  await db.insert(matchQueue).values(
+    newTrackIds.map((id) => ({
+      spotifyId: id,
+      submittedBy: session.user.id,
+      status: "pending",
+    }))
+  );
+
+  return { submitted: newTrackIds.length };
+}
+
+export async function getMatchQueue(
+  limit = 50,
+  offset = 0
+): Promise<{ items: { spotifyId: string; submittedAt: Date; status: string }[]; total: number }> {
+  const [countResult, results] = await Promise.all([
+    db.select({ count: sql<number>`count(*)` }).from(matchQueue).where(eq(matchQueue.status, "pending")),
+    db
+      .select()
+      .from(matchQueue)
+      .where(eq(matchQueue.status, "pending"))
+      .orderBy(matchQueue.submittedAt)
+      .limit(limit)
+      .offset(offset),
+  ]);
+
+  return {
+    items: results.map((r) => ({
+      spotifyId: r.spotifyId,
+      submittedAt: r.submittedAt,
+      status: r.status,
+    })),
+    total: countResult[0]?.count ?? 0,
+  };
+}
+
+export async function updateMatchQueueStatus(trackIds: string[], status: "matched" | "failed"): Promise<void> {
+  if (trackIds.length === 0) return;
+
+  await db
+    .update(matchQueue)
+    .set({ status })
+    .where(inArray(matchQueue.spotifyId, trackIds));
 }

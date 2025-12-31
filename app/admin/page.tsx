@@ -1,8 +1,9 @@
 "use client";
 
 import { authClient } from "@/lib/auth-client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { getBatchTrackMetadata, type TrackMetadata } from "./actions";
+import { getMatchQueue, updateMatchQueueStatus } from "../actions/spotify";
 import { AlbumTracksTable } from "./AlbumTracksTable";
 
 interface AlbumGroup {
@@ -15,6 +16,24 @@ interface AlbumGroup {
   tracks: TrackMetadata[];
 }
 
+const QUEUE_PAGE_SIZE = 100;
+
+// Regex to detect catalog numbers in track titles
+const CATALOG_REGEX = /\b(Op\.?|BWV|K\.?|RV|Hob\.?|D\.?|S\.?|WoO|HWV|WAB|TrV|AV|VB)\s*\d+/i;
+
+// Calculate priority score for an album based on its tracks
+function getAlbumPriorityScore(tracks: TrackMetadata[]): number {
+  let maxScore = 0;
+  for (const track of tracks) {
+    const hasKnownComposer = track.artists.some(a => a.inComposersTable);
+    const hasCatalog = CATALOG_REGEX.test(track.name);
+    const score = (hasKnownComposer ? 2 : 0) + (hasCatalog ? 1 : 0);
+    if (score > maxScore) maxScore = score;
+    if (maxScore === 3) break; // Max possible score
+  }
+  return maxScore;
+}
+
 export default function AdminPageNew() {
   const { data: session } = authClient.useSession();
   const [trackUrisInput, setTrackUrisInput] = useState("");
@@ -22,8 +41,85 @@ export default function AdminPageNew() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [queueTotal, setQueueTotal] = useState(0);
+  const [queueOffset, setQueueOffset] = useState(0);
+  const [loadingQueue, setLoadingQueue] = useState(false);
 
   const isAdmin = session?.user?.name === "benwaffle";
+
+  // Load queue count on mount
+  useEffect(() => {
+    if (!isAdmin) return;
+    loadQueueCount();
+  }, [isAdmin]);
+
+  const loadQueueCount = async () => {
+    setLoadingQueue(true);
+    try {
+      const result = await getMatchQueue(0, 0); // Just get count
+      setQueueTotal(result.total);
+    } catch (err) {
+      console.error("Failed to load queue:", err);
+    } finally {
+      setLoadingQueue(false);
+    }
+  };
+
+  const handleLoadFromQueue = async (offset = 0) => {
+    if (queueTotal === 0) return;
+
+    setLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+    setQueueOffset(offset);
+
+    try {
+      const result = await getMatchQueue(QUEUE_PAGE_SIZE, offset);
+      setQueueTotal(result.total);
+
+      const trackIds = result.items.map((item) => `spotify:track:${item.spotifyId}`);
+      const trackData = await getBatchTrackMetadata(trackIds);
+
+      // Group tracks by album
+      const grouped = trackData.reduce((acc, track) => {
+        const albumId = track.album.id;
+        if (!acc[albumId]) {
+          acc[albumId] = {
+            album: {
+              id: track.album.id,
+              name: track.album.name,
+              release_date: track.album.release_date,
+              images: track.album.images,
+            },
+            tracks: [],
+          };
+        }
+        acc[albumId].tracks.push(track);
+        return acc;
+      }, {} as Record<string, AlbumGroup>);
+
+      // Sort albums by priority (known composers / catalog numbers first)
+      const sortedGroups = Object.values(grouped).sort((a, b) => {
+        return getAlbumPriorityScore(b.tracks) - getAlbumPriorityScore(a.tracks);
+      });
+
+      setAlbumGroups(sortedGroups);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "An error occurred");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTrackSaved = async (trackId: string) => {
+    // Update queue status when track is saved
+    try {
+      await updateMatchQueueStatus([trackId], "matched");
+      setQueueTotal((prev) => Math.max(0, prev - 1));
+    } catch (err) {
+      console.error("Failed to update queue status:", err);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,7 +159,12 @@ export default function AdminPageNew() {
         return acc;
       }, {} as Record<string, AlbumGroup>);
 
-      setAlbumGroups(Object.values(grouped));
+      // Sort albums by priority (known composers / catalog numbers first)
+      const sortedGroups = Object.values(grouped).sort((a, b) => {
+        return getAlbumPriorityScore(b.tracks) - getAlbumPriorityScore(a.tracks);
+      });
+
+      setAlbumGroups(sortedGroups);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
@@ -97,6 +198,60 @@ export default function AdminPageNew() {
         <h1 className="text-4xl font-bold text-black dark:text-zinc-50 mb-8">
           Admin - Batch Track Metadata
         </h1>
+
+        {/* Match Queue Section */}
+        <div className="mb-8 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-black dark:text-white">
+                Match Queue
+              </h2>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                {loadingQueue ? "Loading..." : `${queueTotal} pending tracks`}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadQueueCount}
+                disabled={loadingQueue}
+                className="px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Refresh
+              </button>
+              <button
+                onClick={() => handleLoadFromQueue(0)}
+                disabled={loading || queueTotal === 0}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? "Loading..." : `Load ${Math.min(QUEUE_PAGE_SIZE, queueTotal)} Tracks`}
+              </button>
+            </div>
+          </div>
+          {/* Pagination controls */}
+          {albumGroups.length > 0 && queueTotal > QUEUE_PAGE_SIZE && (
+            <div className="flex items-center justify-center gap-2 mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button
+                onClick={() => handleLoadFromQueue(Math.max(0, queueOffset - QUEUE_PAGE_SIZE))}
+                disabled={loading || queueOffset === 0}
+                className="px-3 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                {queueOffset + 1}–{Math.min(queueOffset + QUEUE_PAGE_SIZE, queueTotal)} of {queueTotal}
+              </span>
+              <button
+                onClick={() => handleLoadFromQueue(queueOffset + QUEUE_PAGE_SIZE)}
+                disabled={loading || queueOffset + QUEUE_PAGE_SIZE >= queueTotal}
+                className="px-3 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="mb-4 text-center text-sm text-zinc-500">— or —</div>
 
         <form onSubmit={handleSubmit} className="mb-8">
           <div className="flex flex-col gap-2 mb-4">
@@ -148,6 +303,7 @@ export default function AdminPageNew() {
                   initialTracks={tracks}
                   onError={setError}
                   onSuccess={setSuccessMessage}
+                  onTrackSaved={handleTrackSaved}
                 />
               ))}
             </div>

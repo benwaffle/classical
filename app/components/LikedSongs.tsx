@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import Image from "next/image";
 import type { SavedTrack, SimplifiedArtist } from "@spotify/web-api-ts-sdk";
-import { getMatchedTracks, type MatchedTrack } from "../actions/spotify";
+import { getMatchedTracks, submitToMatchQueue, type MatchedTrack } from "../actions/spotify";
 import { useSpotifyPlayer } from "@/lib/spotify-player-context";
 import { useLikedSongs } from "@/lib/use-liked-songs";
 import { TrackRow } from "./TrackRow";
@@ -32,6 +32,16 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
         const trackIds = tracks.map((t) => t.track.id);
         const matched = await getMatchedTracks(trackIds);
         setMatchedTracks(matched);
+
+        // Submit unmatched tracks to the queue
+        const matchedIds = new Set(matched.map((m) => m.trackId));
+        const unmatchedIds = trackIds.filter((id) => !matchedIds.has(id));
+        if (unmatchedIds.length > 0) {
+          const result = await submitToMatchQueue(unmatchedIds);
+          if (result.submitted > 0) {
+            console.log(`Submitted ${result.submitted} tracks to match queue`);
+          }
+        }
       } catch (err) {
         console.error("Failed to check matches:", err);
       } finally {

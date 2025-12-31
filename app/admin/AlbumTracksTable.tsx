@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Image from "next/image";
 import {
   getBatchTrackMetadata,
@@ -8,6 +8,7 @@ import {
   addTrackToDatabase,
   addComposer,
   deleteTrackMetadata,
+  checkWorksExist,
   type TrackMetadata,
 } from "./actions";
 import { parseBatchTrackMetadata, type ClassicalMetadata } from "./parse-track";
@@ -26,16 +27,115 @@ interface AlbumTracksTableProps {
   initialTracks: TrackData[];
   onError?: (error: string) => void;
   onSuccess?: (message: string) => void;
+  onTrackSaved?: (trackId: string) => void;
 }
 
-export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: AlbumTracksTableProps) {
+interface EditableMetadata {
+  composerName: string;
+  catalogSystem: string;
+  catalogNumber: string;
+  nickname: string;
+  formalName: string;
+  movement: number | null;
+  movementName: string;
+}
+
+// Regex to detect catalog numbers in track titles
+const CATALOG_REGEX = /\b(Op\.?|BWV|K\.?|RV|Hob\.?|D\.?|S\.?|WoO|HWV|WAB|TrV|AV|VB)\s*\d+/i;
+
+export function AlbumTracksTable({ album, initialTracks, onError, onSuccess, onTrackSaved }: AlbumTracksTableProps) {
   const [tracks, setTracks] = useState<TrackData[]>(initialTracks);
   const [analyzing, setAnalyzing] = useState(false);
   const [savingTracks, setSavingTracks] = useState<Set<string>>(new Set());
+  const [editedMetadata, setEditedMetadata] = useState<Record<string, EditableMetadata>>({});
+  // Record of "CatalogSystem:CatalogNumber" -> { workId, movements: { number, title }[] }
+  const [existingWorks, setExistingWorks] = useState<Record<string, { workId: number; movements: { number: number; title: string | null }[] }>>({});
+
+  // Sort tracks: prioritize known composers and catalog numbers in title
+  const sortedTracks = useMemo(() => {
+    return [...tracks].sort((a, b) => {
+      // Check if any artist is a known composer
+      const aHasKnownComposer = a.artists.some(artist => artist.inComposersTable);
+      const bHasKnownComposer = b.artists.some(artist => artist.inComposersTable);
+
+      // Check if title contains a catalog number
+      const aHasCatalog = CATALOG_REGEX.test(a.name);
+      const bHasCatalog = CATALOG_REGEX.test(b.name);
+
+      // Calculate priority score (higher = more priority)
+      const aScore = (aHasKnownComposer ? 2 : 0) + (aHasCatalog ? 1 : 0);
+      const bScore = (bHasKnownComposer ? 2 : 0) + (bHasCatalog ? 1 : 0);
+
+      if (aScore !== bScore) {
+        return bScore - aScore; // Higher score first
+      }
+
+      // Keep original track order for same priority
+      return a.track_number - b.track_number;
+    });
+  }, [tracks]);
 
   // Helper to check if track has metadata (linked to work/movement)
   const hasMetadata = (track: TrackData) => {
     return track.dbData?.trackMovements && track.dbData.trackMovements.length > 0;
+  };
+
+  // Get editable metadata for a track (from edits > parsed > db)
+  const getEditableMetadata = (track: TrackData): EditableMetadata => {
+    const edited = editedMetadata[track.id];
+    if (edited) return edited;
+
+    // Initialize from parsed or db
+    const composerName = track.parsed?.composerName || track.dbData?.composers[0]?.name || "";
+    const workInfo = track.parsed ? {
+      catalogSystem: track.parsed.catalogSystem || "",
+      catalogNumber: track.parsed.catalogNumber || "",
+      nickname: track.parsed.nickname || "",
+      formalName: track.parsed.formalName || "",
+    } : track.dbData?.works?.[0] ? {
+      catalogSystem: track.dbData.works[0].catalogSystem || "",
+      catalogNumber: track.dbData.works[0].catalogNumber || "",
+      nickname: track.dbData.works[0].nickname || "",
+      formalName: track.dbData.works[0].title || "",
+    } : {
+      catalogSystem: "",
+      catalogNumber: "",
+      nickname: "",
+      formalName: "",
+    };
+    const movementInfo = track.parsed ? {
+      movement: track.parsed.movement,
+      movementName: track.parsed.movementName || "",
+    } : track.dbData?.movements?.[0] ? {
+      movement: track.dbData.movements[0].number,
+      movementName: track.dbData.movements[0].title || "",
+    } : {
+      movement: null,
+      movementName: "",
+    };
+
+    return {
+      composerName,
+      ...workInfo,
+      ...movementInfo,
+    };
+  };
+
+  // Update edited metadata for a track
+  const updateEditedMetadata = (trackId: string, field: keyof EditableMetadata, value: string | number | null) => {
+    setEditedMetadata(prev => {
+      const track = tracks.find(t => t.id === trackId);
+      if (!track) return prev;
+
+      const current = prev[trackId] || getEditableMetadata(track);
+      return {
+        ...prev,
+        [trackId]: {
+          ...current,
+          [field]: value,
+        },
+      };
+    });
   };
 
   // Helper to get composer name (from parsed or DB)
@@ -51,97 +151,67 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
     return composerArtist?.inComposersTable || false;
   };
 
-  // Helper to get work info (from parsed or DB)
-  const getWorkInfo = (track: TrackData): {
-    catalogSystem: string | null;
-    catalogNumber: string | null;
-    nickname: string | null;
-    title: string;
-  } | null => {
-    if (track.parsed) {
-      return {
-        catalogSystem: track.parsed.catalogSystem,
-        catalogNumber: track.parsed.catalogNumber,
-        nickname: track.parsed.nickname,
-        title: track.parsed.formalName,
-      };
-    }
-    if (track.dbData?.works?.[0]) {
-      const w = track.dbData.works[0];
-      return {
-        catalogSystem: w.catalogSystem,
-        catalogNumber: w.catalogNumber,
-        nickname: w.nickname,
-        title: w.title,
-      };
-    }
-    return null;
-  };
-
   // Helper to check if work exists in DB
   const workExistsInDb = (track: TrackData) => {
-    const workInfo = getWorkInfo(track);
-    if (!workInfo) return false;
-    return track.dbData?.works?.some(w => {
-      if (workInfo.catalogSystem && workInfo.catalogNumber) {
-        return w.catalogSystem === workInfo.catalogSystem &&
-               w.catalogNumber === workInfo.catalogNumber;
-      }
-      return w.title === workInfo.title;
-    }) || false;
-  };
+    const metadata = getEditableMetadata(track);
 
-  // Helper to get movement info (from parsed or DB)
-  const getMovementInfo = (track: TrackData) => {
-    if (track.parsed) {
-      return {
-        number: track.parsed.movement,
-        title: track.parsed.movementName,
-      };
+    // First check if track is already linked to a work
+    if (track.dbData?.works?.some(w => {
+      if (metadata.catalogSystem && metadata.catalogNumber) {
+        return w.catalogSystem === metadata.catalogSystem &&
+               w.catalogNumber === metadata.catalogNumber;
+      }
+      return w.title === metadata.formalName;
+    })) {
+      return true;
     }
-    if (track.dbData?.movements?.[0]) {
-      return track.dbData.movements[0];
+
+    // Then check the existingWorks record from batch lookup
+    if (metadata.catalogSystem && metadata.catalogNumber) {
+      const key = `${metadata.catalogSystem}:${metadata.catalogNumber}`;
+      return key in existingWorks;
     }
-    return null;
+
+    return false;
   };
 
   // Helper to check if movement exists in DB
   const movementExistsInDb = (track: TrackData) => {
-    const movementInfo = getMovementInfo(track);
-    if (!movementInfo?.number) return false;
-    return track.dbData?.movements?.some(m =>
-      m.number === movementInfo.number
-    ) || false;
-  };
+    const metadata = getEditableMetadata(track);
+    if (metadata.movement == null) return false;
 
-  // Helper to get inferred movement number
-  const getInferredMovement = (track: TrackData) => {
-    if (!track.parsed || track.parsed.movement) return null;
-
-    const parsed = track.parsed;
-    const sameWorkTracks = tracks
-      .filter(t => {
-        if (t.album.id !== track.album.id) return false;
-
-        const parsedMatch = t.parsed?.catalogSystem === parsed.catalogSystem &&
-                           t.parsed?.catalogNumber === parsed.catalogNumber &&
-                           t.parsed?.composerName === parsed.composerName;
-
-        const dbMatch = t.dbData?.works?.some(w =>
-          w.catalogSystem === parsed.catalogSystem &&
-          w.catalogNumber === parsed.catalogNumber
-        );
-
-        return parsedMatch || dbMatch;
-      })
-      .sort((a, b) => a.track_number - b.track_number);
-
-    if (sameWorkTracks.length > 1) {
-      const position = sameWorkTracks.findIndex(t => t.id === track.id);
-      return position >= 0 ? position + 1 : -1;
+    // First check if track is already linked to this movement
+    if (track.dbData?.movements?.some(m => m.number === metadata.movement)) {
+      return true;
     }
-    return 1;
+
+    // Then check the existingWorks record for the movement
+    if (metadata.catalogSystem && metadata.catalogNumber) {
+      const key = `${metadata.catalogSystem}:${metadata.catalogNumber}`;
+      const workData = existingWorks[key];
+      if (workData && workData.movements.some(m => m.number === metadata.movement)) {
+        return true;
+      }
+    }
+
+    return false;
   };
+
+  // Convert number to roman numeral
+  const toRoman = (num: number): string => {
+    const romanNumerals: [number, string][] = [
+      [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]
+    ];
+    let result = "";
+    for (const [value, symbol] of romanNumerals) {
+      while (num >= value) {
+        result += symbol;
+        num -= value;
+      }
+    }
+    return result;
+  };
+
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
@@ -168,6 +238,16 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
         }
         return track;
       }));
+
+      // Check which works already exist in the database
+      const catalogQueries = parsedResults
+        .filter(p => p.catalogSystem && p.catalogNumber)
+        .map(p => ({ catalogSystem: p.catalogSystem!, catalogNumber: p.catalogNumber! }));
+
+      if (catalogQueries.length > 0) {
+        const existing = await checkWorksExist(catalogQueries);
+        setExistingWorks(existing);
+      }
     } catch (err) {
       onError?.(err instanceof Error ? err.message : "An error occurred");
     } finally {
@@ -176,19 +256,20 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
   };
 
   const handleSaveTrack = async (track: TrackData) => {
-    const composerName = getComposerName(track);
-    const workInfo = getWorkInfo(track);
-    const movementInfo = getMovementInfo(track);
+    const metadata = getEditableMetadata(track);
 
-    if (!composerName || !workInfo) return;
+    if (!metadata.composerName || !metadata.formalName) {
+      onError?.("Composer name and work title are required");
+      return;
+    }
 
     setSavingTracks(prev => new Set(prev).add(track.id));
 
     try {
-      const composerArtist = track.artists.find(a => a.name === composerName);
+      const composerArtist = track.artists.find(a => a.name === metadata.composerName);
 
       if (!composerArtist) {
-        throw new Error(`Could not find composer artist: ${composerName}`);
+        throw new Error(`Could not find composer artist: ${metadata.composerName}`);
       }
 
       if (!track.album.inSpotifyAlbumsTable) {
@@ -210,7 +291,7 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
 
       let composerId = composerArtist.composerId;
       if (!composerId) {
-        const result = await addComposer(composerArtist.id, composerName);
+        const result = await addComposer(composerArtist.id, metadata.composerName);
         composerId = result.composer.id;
       }
 
@@ -227,23 +308,19 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
         });
       }
 
-      let movementNumber = movementInfo?.number;
+      let movementNumber = metadata.movement;
 
       if (!movementNumber) {
         const sameWorkTracks = tracks
           .filter(t => {
             if (t.album.id !== track.album.id) return false;
 
-            const parsedMatch = t.parsed?.catalogSystem === workInfo.catalogSystem &&
-                               t.parsed?.catalogNumber === workInfo.catalogNumber &&
-                               t.parsed?.composerName === composerName;
+            const tMeta = getEditableMetadata(t);
+            const metadataMatch = tMeta.catalogSystem === metadata.catalogSystem &&
+                                  tMeta.catalogNumber === metadata.catalogNumber &&
+                                  tMeta.composerName === metadata.composerName;
 
-            const dbMatch = t.dbData?.works?.some(w =>
-              w.catalogSystem === workInfo.catalogSystem &&
-              w.catalogNumber === workInfo.catalogNumber
-            );
-
-            return parsedMatch || dbMatch;
+            return metadataMatch;
           })
           .sort((a, b) => a.track_number - b.track_number);
 
@@ -257,14 +334,14 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
 
       await addWorkMovementAndTrack({
         composerId,
-        formalName: workInfo.title,
-        nickname: workInfo.nickname || null,
-        catalogSystem: workInfo.catalogSystem || null,
-        catalogNumber: workInfo.catalogNumber || null,
+        formalName: metadata.formalName,
+        nickname: metadata.nickname || null,
+        catalogSystem: metadata.catalogSystem || null,
+        catalogNumber: metadata.catalogNumber || null,
         key: track.parsed?.key || null,
         form: track.parsed?.form || null,
         movementNumber,
-        movementName: movementInfo?.title || null,
+        movementName: metadata.movementName || null,
         yearComposed: track.parsed?.yearComposed || null,
         spotifyTrackId: track.id,
         spotifyAlbumId: track.album.id,
@@ -276,6 +353,7 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
       ));
 
       onSuccess?.(`Saved: ${track.name}`);
+      onTrackSaved?.(track.id);
     } catch (err) {
       onError?.(err instanceof Error ? err.message : "An error occurred while saving");
     } finally {
@@ -359,142 +437,266 @@ export function AlbumTracksTable({ album, initialTracks, onError, onSuccess }: A
           </tr>
         </thead>
         <tbody className="text-sm">
-          {tracks.map((track) => (
-            <tr key={track.id} className="border-t border-zinc-200 dark:border-zinc-700">
-              <td className="px-4 py-3 text-zinc-500">{track.track_number}</td>
-              <td className="px-4 py-3">
-                <div>
-                  <div className="text-black dark:text-white">{track.name}</div>
-                  <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                    {track.artists.map((a, idx) => (
-                      <span key={a.id}>
-                        {idx > 0 && ', '}
-                        <span className={
-                          getComposerName(track) === a.name
-                            ? 'font-semibold text-zinc-700 dark:text-zinc-300'
-                            : ''
-                        }>
-                          {a.name}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </td>
-              <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
-                <div className="flex items-center gap-2">
-                  <span>{getComposerName(track) || '-'}</span>
-                  {getComposerName(track) && (
-                    composerExistsInDb(track) ? (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
-                        ✓
-                      </span>
-                    ) : (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
-                        new
-                      </span>
-                    )
-                  )}
-                </div>
-              </td>
-              <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
-                <div className="flex items-center gap-2">
-                  {(() => {
-                    const workInfo = getWorkInfo(track);
-                    return workInfo ? (
-                      <>
-                        <span>
-                          {workInfo.catalogSystem} {workInfo.catalogNumber}
-                          {workInfo.nickname && ` "${workInfo.nickname}"`}
-                        </span>
-                        {workExistsInDb(track) ? (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
-                            ✓
-                          </span>
-                        ) : (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
-                            new
-                          </span>
-                        )}
-                      </>
-                    ) : '-';
-                  })()}
-                </div>
-              </td>
-              <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
-                <div className="flex items-center gap-2">
-                  {(() => {
-                    const inferredMovement = getInferredMovement(track);
-                    const movementInfo = getMovementInfo(track);
-                    const displayMovement = movementInfo?.number || inferredMovement || '-';
-                    const movementTitle = movementInfo?.title;
+          {sortedTracks.map((track) => {
+            const metadata = getEditableMetadata(track);
+            const isLinked = hasMetadata(track);
+            const canEdit = !isLinked && (track.parsed || editedMetadata[track.id]);
 
-                    return (
-                      <div className="flex flex-col">
+            return (
+              <tr key={track.id} className="border-t border-zinc-200 dark:border-zinc-700">
+                <td className="px-4 py-3 text-zinc-500">{track.track_number}</td>
+                <td className="px-4 py-3">
+                  <div>
+                    <div className="text-black dark:text-white">{track.name}</div>
+                    <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      {track.artists.map((a, idx) => (
+                        <span key={a.id}>
+                          {idx > 0 && ', '}
+                          <span className={
+                            metadata.composerName === a.name
+                              ? 'font-semibold text-zinc-700 dark:text-zinc-300'
+                              : ''
+                          }>
+                            {a.name}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
+                  {(() => {
+                    const composerInDb = metadata.composerName && track.artists.find(a => a.name === metadata.composerName)?.inComposersTable;
+
+                    if (!canEdit || composerInDb) {
+                      // Read-only: either not editable or composer already in DB
+                      return (
                         <div className="flex items-center gap-2">
-                          <span>{displayMovement}</span>
-                          {(movementInfo || inferredMovement) && (
-                            movementExistsInDb(track) ? (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
-                                ✓
-                              </span>
-                            ) : inferredMovement !== null && !movementInfo?.number ? (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400">
-                                inferred
-                              </span>
-                            ) : (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
-                                new
-                              </span>
-                            )
+                          <span>{metadata.composerName || '-'}</span>
+                          {composerInDb && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                              ✓
+                            </span>
                           )}
                         </div>
-                        {movementTitle && (
-                          <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                            {movementTitle}
-                          </div>
+                      );
+                    }
+
+                    // Editable: composer not in DB yet
+                    return (
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={metadata.composerName}
+                          onChange={(e) => updateEditedMetadata(track.id, 'composerName', e.target.value)}
+                          className="flex-1 px-2 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                        >
+                          <option value="">Select composer...</option>
+                          {track.artists.map((a) => (
+                            <option key={a.id} value={a.name}>
+                              {a.name}{a.inComposersTable ? ' ✓' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        {metadata.composerName && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 shrink-0">
+                            new
+                          </span>
                         )}
                       </div>
                     );
                   })()}
-                </div>
-              </td>
-              <td className="px-4 py-3">
-                {hasMetadata(track) ? (
-                  <span className="text-xs px-2 py-1 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
-                    Linked
-                  </span>
-                ) : (track.parsed || track.dbData?.works?.length) ? (
-                  <span className="text-xs px-2 py-1 rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400">
-                    Ready
-                  </span>
-                ) : (
-                  <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400">
-                    Unknown
-                  </span>
-                )}
-              </td>
-              <td className="px-4 py-3 text-right">
-                {(track.parsed || getWorkInfo(track)) && !hasMetadata(track) ? (
-                  <button
-                    onClick={() => handleSaveTrack(track)}
-                    disabled={savingTracks.has(track.id)}
-                    className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {savingTracks.has(track.id) ? "Saving..." : "Save"}
-                  </button>
-                ) : hasMetadata(track) ? (
-                  <button
-                    onClick={() => handleUnlink(track)}
-                    disabled={savingTracks.has(track.id)}
-                    className="text-xs px-3 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {savingTracks.has(track.id) ? "Unlinking..." : "Unlink"}
-                  </button>
-                ) : null}
-              </td>
-            </tr>
-          ))}
+                </td>
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
+                  {(() => {
+                    const workInDb = workExistsInDb(track);
+
+                    if (!canEdit || workInDb) {
+                      // Read-only: either not editable or work already in DB
+                      return (
+                        <div className="flex items-center gap-2">
+                          {metadata.catalogSystem || metadata.catalogNumber || metadata.formalName ? (
+                            <>
+                              <span>
+                                {metadata.catalogSystem} {metadata.catalogNumber}
+                                {metadata.nickname && ` "${metadata.nickname}"`}
+                                {!metadata.catalogSystem && !metadata.catalogNumber && metadata.formalName}
+                              </span>
+                              {workInDb && (
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                                  ✓
+                                </span>
+                              )}
+                            </>
+                          ) : '-'}
+                        </div>
+                      );
+                    }
+
+                    // Editable: work not in DB yet
+                    return (
+                      <div className="flex items-start gap-2">
+                        <div className="flex flex-col gap-1 flex-1">
+                          <div className="flex gap-1">
+                            <input
+                              type="text"
+                              value={metadata.catalogSystem}
+                              onChange={(e) => updateEditedMetadata(track.id, 'catalogSystem', e.target.value)}
+                              placeholder="Cat."
+                              className="w-12 px-1.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                            />
+                            <input
+                              type="text"
+                              value={metadata.catalogNumber}
+                              onChange={(e) => updateEditedMetadata(track.id, 'catalogNumber', e.target.value)}
+                              placeholder="No."
+                              className="w-16 px-1.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                            />
+                            <input
+                              type="text"
+                              value={metadata.nickname}
+                              onChange={(e) => updateEditedMetadata(track.id, 'nickname', e.target.value)}
+                              placeholder="Nickname"
+                              className="w-24 px-1.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            value={metadata.formalName}
+                            onChange={(e) => updateEditedMetadata(track.id, 'formalName', e.target.value)}
+                            placeholder="Work title (required)"
+                            className="w-full px-1.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                          />
+                        </div>
+                        {metadata.formalName && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 shrink-0 mt-1">
+                            new
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </td>
+                <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">
+                  {(() => {
+                    const workInDb = workExistsInDb(track);
+                    const workKey = metadata.catalogSystem && metadata.catalogNumber
+                      ? `${metadata.catalogSystem}:${metadata.catalogNumber}`
+                      : null;
+                    const availableMovements = workKey ? existingWorks[workKey]?.movements ?? [] : [];
+
+                    if (!canEdit) {
+                      // Read-only display
+                      return (
+                        <div className="flex flex-col">
+                          <div className="flex items-center gap-2">
+                            <span>{metadata.movement ?? '-'}</span>
+                            {metadata.movement && movementExistsInDb(track) && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                                ✓
+                              </span>
+                            )}
+                          </div>
+                          {metadata.movementName && (
+                            <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                              {metadata.movementName}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    // Work exists in DB - show dropdown of existing movements
+                    if (workInDb && availableMovements.length > 0) {
+                      return (
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={metadata.movement ?? ''}
+                            onChange={(e) => updateEditedMetadata(track.id, 'movement', e.target.value ? parseInt(e.target.value) : null)}
+                            className="flex-1 min-w-0 px-1.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                          >
+                            <option value="">Select...</option>
+                            {availableMovements
+                              .sort((a, b) => a.number - b.number)
+                              .map(mvt => (
+                                <option key={mvt.number} value={mvt.number}>
+                                  {toRoman(mvt.number)}.{mvt.title ? ` ${mvt.title}` : ''}
+                                </option>
+                              ))}
+                          </select>
+                          {metadata.movement != null && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 shrink-0">
+                              ✓
+                            </span>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    // Work doesn't exist - show text inputs for new movement
+                    return (
+                      <div className="flex items-start gap-2">
+                        <div className="flex flex-col gap-1 flex-1">
+                          <input
+                            type="number"
+                            value={metadata.movement ?? ''}
+                            onChange={(e) => updateEditedMetadata(track.id, 'movement', e.target.value ? parseInt(e.target.value) : null)}
+                            placeholder="#"
+                            className="w-12 px-1.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                          />
+                          <input
+                            type="text"
+                            value={metadata.movementName}
+                            onChange={(e) => updateEditedMetadata(track.id, 'movementName', e.target.value)}
+                            placeholder="Movement name"
+                            className="w-full px-1.5 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                          />
+                        </div>
+                        {metadata.movement != null && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 shrink-0 mt-1">
+                            new
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </td>
+                <td className="px-4 py-3">
+                  {isLinked ? (
+                    <span className="text-xs px-2 py-1 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                      Linked
+                    </span>
+                  ) : (track.parsed || editedMetadata[track.id]) ? (
+                    <span className="text-xs px-2 py-1 rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400">
+                      Ready
+                    </span>
+                  ) : (
+                    <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400">
+                      Unknown
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {canEdit ? (
+                    <button
+                      onClick={() => handleSaveTrack(track)}
+                      disabled={savingTracks.has(track.id)}
+                      className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {savingTracks.has(track.id) ? "Saving..." : "Save"}
+                    </button>
+                  ) : isLinked ? (
+                    <button
+                      onClick={() => handleUnlink(track)}
+                      disabled={savingTracks.has(track.id)}
+                      className="text-xs px-3 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {savingTracks.has(track.id) ? "Unlinking..." : "Unlink"}
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
