@@ -3,22 +3,19 @@
 import { useEffect, useState, useRef } from "react";
 import Image from "next/image";
 import { createSpotifySdk } from "@/lib/spotify-sdk";
-import type { MaxInt, SavedTrack, Track as SpotifyTrack } from "@spotify/web-api-ts-sdk";
+import type { MaxInt, SavedTrack, Track } from "@spotify/web-api-ts-sdk";
 import { getMatchedTracks, type MatchedTrack } from "../actions/spotify";
-
-type Track = SpotifyTrack;
-type LikedTrack = SavedTrack;
+import { useSpotifyPlayer } from "@/lib/spotify-player-context";
 
 const spotifyClientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID ?? "";
 
 interface LikedSongsProps {
   accessToken: string;
-  onPlayTrack: (track: Track) => void;
-  currentTrack: Track | null;
 }
 
-export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSongsProps) {
-  const [tracks, setTracks] = useState<LikedTrack[]>([]);
+export function LikedSongs({ accessToken }: LikedSongsProps) {
+  const { currentTrack, play } = useSpotifyPlayer();
+  const [tracks, setTracks] = useState<SavedTrack[]>([]);
   const [matchedTracks, setMatchedTracks] = useState<MatchedTrack[]>([]);
   const [loading, setLoading] = useState(true);
   const [checkingMatches, setCheckingMatches] = useState(false);
@@ -80,7 +77,7 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
         const store = tx.objectStore("likedSongs");
         const request = store.getAll();
 
-        return new Promise<LikedTrack[]>((resolve) => {
+        return new Promise<SavedTrack[]>((resolve) => {
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => resolve([]);
         });
@@ -89,7 +86,7 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
       }
     }
 
-    async function setCache(tracks: LikedTrack[], total: number) {
+    async function setCache(tracks: SavedTrack[], total: number) {
       try {
         const db = await openDB();
         const tx = db.transaction(["likedSongs", "metadata"], "readwrite");
@@ -111,7 +108,7 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
       }
     }
 
-    async function checkMatches(allTracks: LikedTrack[]) {
+    async function checkMatches(allTracks: SavedTrack[]) {
       setCheckingMatches(true);
       try {
         const trackIds = allTracks.map((t) => t.track.id);
@@ -138,7 +135,7 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
 
         const spotify = createSpotifySdk(accessToken, spotifyClientId);
         const limit = 50 as MaxInt<50>;
-        const allTracks: LikedTrack[] = [];
+        const allTracks: SavedTrack[] = [];
         let offset = 0;
         let hasNext = true;
 
@@ -218,7 +215,7 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
   const matchedTrackIds = new Set(matchedTracks.map((m) => m.trackId));
 
   // Group matched tracks by work
-  const matchedByWork = new Map<number, { work: MatchedTrack["work"]; tracks: LikedTrack[] }>();
+  const matchedByWork = new Map<number, { work: MatchedTrack["work"]; tracks: SavedTrack[] }>();
   for (const likedTrack of sortedTracks) {
     const work = trackWorkMap.get(likedTrack.track.id);
     if (work) {
@@ -232,6 +229,17 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
   }
 
   const unmatchedTracksList = sortedTracks.filter((t) => !matchedTrackIds.has(t.track.id));
+
+  const handlePlayTrack = (track: Track) => {
+    play([track.uri]);
+  };
+
+  const formatDuration = (ms: number) => {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
 
   const TrackRow = ({
     track,
@@ -250,9 +258,14 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
       ? track.artists.filter((a) => a.name !== hideComposer)
       : track.artists;
 
+    const artistNames = artists.map((a) => a.name).join(", ");
+    const showArtists = !hideArtwork;
+    const showAlbum = !hideArtwork;
+    const shouldShowLine = (showArtists && artistNames.length > 0) || showAlbum;
+
     return (
       <button
-        onClick={() => onPlayTrack(track)}
+        onClick={() => play([track.uri])}
         className={`w-full flex items-center gap-3 p-2 text-left cursor-pointer ${
           hideArtwork ? "" : "rounded"
         } ${
@@ -271,19 +284,28 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
           />
         )}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-black dark:text-zinc-50 truncate">
-            {displayName ?? track.name}
+          <p className="text-sm font-semibold text-black dark:text-zinc-50 truncate flex items-center gap-2">
+            <span className="truncate">{displayName ?? track.name}</span>
+            <span className="text-xs text-zinc-500">{formatDuration(track.duration_ms)}</span>
           </p>
-          <p className="text-xs text-zinc-600 dark:text-zinc-400 truncate">
-            {artists.length > 0 ? `${artists.map((a) => a.name).join(", ")} • ` : ""}{track.album.name}
-          </p>
+          {shouldShowLine && (
+            <p className="text-xs text-zinc-600 dark:text-zinc-400 truncate">
+              {showArtists ? artistNames : ""}
+              {showAlbum && (
+                <>
+                  {showArtists && artistNames ? " • " : ""}
+                  {track.album.name}
+                </>
+              )}
+            </p>
+          )}
         </div>
       </button>
     );
   };
 
   return (
-    <div className="w-full max-w-4xl">
+    <div className="w-full">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold text-black dark:text-zinc-50">
           Your Liked Songs
@@ -311,62 +333,20 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
             {checkingMatches ? "..." : `${matchedTrackIds.size} tracks, ${matchedByWork.size} works`}
           </span>
         </div>
-        <div className="space-y-1">
+        <div className="divide-y divide-zinc-200 dark:divide-zinc-700 md:divide-y-0 md:grid md:grid-cols-[minmax(0,_1fr)_max-content] md:border md:border-zinc-200 md:dark:border-zinc-700">
           {Array.from(matchedByWork.values()).map(({ work, tracks: workTracks }) => {
-            if (workTracks.length === 1) {
-              // Single-track work - compact view with styled text
-              const { track } = workTracks[0];
-              const movementDisplay = trackMovementNameMap.get(track.id);
-              const artists = track.artists.filter((a) => a.name !== work.composerName);
-              const isPlaying = currentTrack?.id === track.id;
-              return (
-                <button
-                  key={work.id}
-                  onClick={() => onPlayTrack(track)}
-                  className={`w-full flex items-center gap-3 p-2 rounded text-left cursor-pointer ${
-                    isPlaying
-                      ? "bg-green-100 dark:bg-green-900/30 hover:bg-green-200 dark:hover:bg-green-900/40"
-                      : "bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800"
-                  }`}
-                >
-                  {track.album.images[0] && (
-                    <Image
-                      src={track.album.images[0].url}
-                      alt={track.album.name}
-                      width={40}
-                      height={40}
-                      className="rounded"
-                    />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-black dark:text-zinc-50 truncate">
-                      <span className="font-medium">{work.composerName}</span>
-                      <span className="text-zinc-400 mx-1.5">&middot;</span>
-                      <span>{work.title}</span>
-                      {work.nickname && <span className="text-zinc-500"> &ldquo;{work.nickname}&rdquo;</span>}
-                      {work.catalogSystem && work.catalogNumber && (
-                        <span className="text-zinc-500">, {work.catalogSystem} {work.catalogNumber}</span>
-                      )}
-                      {movementDisplay && (
-                        <>
-                          <span className="text-zinc-400 mx-1.5">&middot;</span>
-                          <span>{movementDisplay}</span>
-                        </>
-                      )}
-                    </p>
-                    <p className="text-xs text-zinc-600 dark:text-zinc-400 truncate">
-                      {artists.length > 0 ? `${artists.map((a) => a.name).join(", ")} • ` : ""}{track.album.name}
-                    </p>
-                  </div>
-                </button>
-              );
-            }
-
-            // Multi-track work - with header
             const firstTrack = workTracks[0].track;
+            const headerArtists = Array.from(
+              new Set(
+                firstTrack.artists
+                  .filter((a) => a.name !== work.composerName)
+                  .map((a) => a.name)
+              )
+            );
+
             return (
-              <div key={work.id} className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden my-3">
-                <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700 flex items-center gap-3">
+              <div key={work.id} className="contents">
+                <div className="px-3 py-3 flex items-center gap-3 border-b border-zinc-200 dark:border-zinc-700 md:border-b md:border-r md:pr-10">
                   {firstTrack.album.images[0] && (
                     <Image
                       src={firstTrack.album.images[0].url}
@@ -386,26 +366,34 @@ export function LikedSongs({ accessToken, onPlayTrack, currentTrack }: LikedSong
                         <span className="text-zinc-500">, {work.catalogSystem} {work.catalogNumber}</span>
                       )}
                     </p>
-                    <p className="text-xs text-zinc-500 truncate">{firstTrack.album.name}</p>
+                    <p className="text-xs text-zinc-500 truncate">
+                      {headerArtists.join(", ")}
+                      {firstTrack.album.name && (
+                        <>
+                          {headerArtists.length ? " • " : ""}
+                          {firstTrack.album.name}
+                        </>
+                      )}
+                    </p>
                   </div>
                 </div>
-                <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                <div className="divide-y divide-zinc-200 dark:divide-zinc-700 border-b border-zinc-200 dark:border-zinc-700 md:border-b md:border-l">
                   {[...workTracks]
-                    .sort((a, b) => {
-                      const movA = trackMovementMap.get(a.track.id) ?? 0;
-                      const movB = trackMovementMap.get(b.track.id) ?? 0;
-                      return movA - movB;
-                    })
-                    .map(({ track }) => (
-                      <TrackRow
-                        key={track.id}
-                        track={track}
-                        displayName={trackMovementNameMap.get(track.id) ?? undefined}
-                        hideComposer={work.composerName}
-                        hideArtwork
-                        isPlaying={currentTrack?.id === track.id}
-                      />
-                    ))}
+                      .sort((a, b) => {
+                        const movA = trackMovementMap.get(a.track.id) ?? 0;
+                        const movB = trackMovementMap.get(b.track.id) ?? 0;
+                        return movA - movB;
+                      })
+                      .map(({ track }) => (
+                        <TrackRow
+                          key={track.id}
+                          track={track}
+                          displayName={trackMovementNameMap.get(track.id) ?? undefined}
+                          hideComposer={work.composerName}
+                          hideArtwork
+                          isPlaying={currentTrack?.id === track.id}
+                        />
+                      ))}
                 </div>
               </div>
             );

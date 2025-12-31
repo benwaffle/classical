@@ -1,7 +1,7 @@
 import { defineConfig } from "drizzle-kit";
 
 export default defineConfig({
-  schema: "./lib/db/schema.ts",
+  schema: "./app/lib/db/schema.ts",
   out: "./drizzle",
   dialect: "turso",
   dbCredentials: {

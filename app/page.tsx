@@ -3,16 +3,13 @@
 import { authClient } from "@/lib/auth-client";
 import { LikedSongs } from "./components/LikedSongs";
 import { SpotifyPlayer } from "./components/SpotifyPlayer";
+import { SpotifyPlayerProvider } from "@/lib/spotify-player-context";
 import { useEffect, useState } from "react";
 import { getSpotifyToken } from "./actions/spotify";
-import type { Track as SpotifyTrack } from "@spotify/web-api-ts-sdk";
-
-type Track = SpotifyTrack;
 
 export default function Home() {
   const { data: session } = authClient.useSession();
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
 
   useEffect(() => {
     if (session) {
@@ -34,8 +31,8 @@ export default function Home() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-4xl flex-col items-center gap-8 py-16 px-8 bg-white dark:bg-black">
+    <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
+      <main className="flex min-h-screen w-full flex-col items-center gap-8 py-16 px-4 sm:px-8">
         <div className="w-full flex items-center justify-between">
           <h1 className="text-4xl font-bold text-black dark:text-zinc-50">
             Classical Music Streaming
@@ -51,11 +48,11 @@ export default function Home() {
         </div>
 
         {session ? (
-          accessToken ? (
-            <>
-              <LikedSongs accessToken={accessToken} onPlayTrack={setCurrentTrack} currentTrack={currentTrack} />
-              <SpotifyPlayer accessToken={accessToken} currentTrack={currentTrack} />
-            </>
+      accessToken ? (
+        <SpotifyPlayerProvider accessToken={accessToken}>
+          <LikedSongs accessToken={accessToken} />
+          <SpotifyPlayer />
+        </SpotifyPlayerProvider>
           ) : (
             <div className="flex items-center justify-center py-12">
               <p className="text-zinc-600 dark:text-zinc-400">Loading...</p>
