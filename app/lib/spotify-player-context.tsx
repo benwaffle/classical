@@ -56,6 +56,7 @@ export function SpotifyPlayerProvider({ accessToken, children }: SpotifyPlayerPr
   });
 
   const playerRef = useRef<Spotify.Player | null>(null);
+  const accessTokenRef = useRef(accessToken);
   const progressRef = useRef<PlaybackProgress>({
     position: 0,
     duration: 0,
@@ -63,6 +64,11 @@ export function SpotifyPlayerProvider({ accessToken, children }: SpotifyPlayerPr
     paused: true,
   });
   const progressSubscribersRef = useRef<Set<(progress: PlaybackProgress) => void>>(new Set());
+
+  // Keep the token ref in sync with the latest prop value
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
 
   // Notify progress subscribers
   const notifyProgressSubscribers = useCallback(() => {
@@ -79,7 +85,7 @@ export function SpotifyPlayerProvider({ accessToken, children }: SpotifyPlayerPr
     window.onSpotifyWebPlaybackSDKReady = () => {
       const player = new window.Spotify.Player({
         name: 'prelude.fm',
-        getOAuthToken: (cb) => cb(accessToken),
+        getOAuthToken: (cb) => cb(accessTokenRef.current),
         volume: 1,
       });
 
@@ -125,7 +131,7 @@ export function SpotifyPlayerProvider({ accessToken, children }: SpotifyPlayerPr
     return () => {
       playerRef.current?.disconnect();
     };
-  }, [accessToken, notifyProgressSubscribers]);
+  }, [notifyProgressSubscribers]);
 
   // --- Actions (stable references) ---
 
