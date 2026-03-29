@@ -7,16 +7,32 @@ import { SpotifyPlayerProvider } from '@/lib/spotify-player-context';
 import { useEffect, useState } from 'react';
 import { getSpotifyToken } from './actions/spotify';
 
+// Refresh the token every 50 minutes (Spotify tokens expire after 60 minutes)
+const TOKEN_REFRESH_INTERVAL_MS = 50 * 60 * 1000;
+
 export default function Home() {
   const { data: session } = authClient.useSession();
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    if (session) {
+    if (!session) return;
+
+    let cancelled = false;
+
+    const refresh = () => {
       getSpotifyToken()
-        .then((token) => setAccessToken(token))
+        .then((token) => {
+          if (!cancelled) setAccessToken(token);
+        })
         .catch((err) => console.error('Error fetching token:', err));
-    }
+    };
+
+    refresh();
+    const interval = setInterval(refresh, TOKEN_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [session]);
 
   const handleSignIn = async () => {
