@@ -30,9 +30,9 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
   const [queuedTrackIds, setQueuedTrackIds] = useState<Set<string>>(new Set());
   const hasCheckedMatches = useRef(false);
 
-  // Check matches when tracks are loaded
+  // Check matches when all tracks are loaded
   useEffect(() => {
-    if (tracks.length === 0 || hasCheckedMatches.current) return;
+    if (loading || tracks.length === 0 || hasCheckedMatches.current) return;
     hasCheckedMatches.current = true;
 
     async function checkMatches() {
@@ -82,7 +82,7 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
     }
 
     checkMatches();
-  }, [tracks]);
+  }, [tracks, loading]);
 
   const handleMarkAsClassical = async (trackId: string) => {
     setMarkingTracks((prev) => new Set(prev).add(trackId));
