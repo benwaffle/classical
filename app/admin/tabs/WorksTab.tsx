@@ -732,6 +732,7 @@ export function WorksTab() {
                 <th className="px-2 py-1 text-left">Title</th>
                 <th className="px-2 py-1 text-left">Catalog</th>
                 <th className="px-2 py-1 text-left">Form</th>
+                <th className="px-2 py-1 text-left">Year</th>
                 <th className="px-2 py-1 text-left">Movements</th>
                 <th className="px-2 py-1 text-left">Recordings</th>
                 <th className="px-2 py-1 text-right">Actions</th>
@@ -758,6 +759,9 @@ export function WorksTab() {
                   </td>
                   <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
                     {work.form || '-'}
+                  </td>
+                  <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
+                    {work.yearComposed ?? '-'}
                   </td>
                   <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
                     {work.movementCount}
