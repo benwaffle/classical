@@ -73,6 +73,10 @@ export function WorksTab() {
   // Saving states
   const [saving, setSaving] = useState(false);
 
+  // Pagination
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(0);
+
   const loadComposers = useCallback(async () => {
     try {
       const results = await searchComposers('');
@@ -83,8 +87,13 @@ export function WorksTab() {
   }, []);
 
   const loadWorks = useCallback(
-    async (options?: { query?: string; composerId?: number; catalogSystem?: string }) => {
-      const { query, composerId, catalogSystem } = options ?? {};
+    async (options?: {
+      query?: string;
+      composerId?: number;
+      catalogSystem?: string;
+      page?: number;
+    }) => {
+      const { query, composerId, catalogSystem, page: pageArg = 0 } = options ?? {};
       setLoading(true);
       setError(null);
       try {
@@ -92,6 +101,8 @@ export function WorksTab() {
           query || undefined,
           composerId,
           catalogSystem || undefined,
+          PAGE_SIZE,
+          pageArg * PAGE_SIZE,
         );
         setWorks(result.items);
         setTotalWorks(result.total);
@@ -110,10 +121,22 @@ export function WorksTab() {
   }, [loadComposers, loadWorks]);
 
   const handleSearch = () => {
+    setPage(0);
     loadWorks({
       query: searchQuery || undefined,
       composerId: filterComposerId,
       catalogSystem: filterCatalogSystem || undefined,
+      page: 0,
+    });
+  };
+
+  const goToPage = (next: number) => {
+    setPage(next);
+    loadWorks({
+      query: searchQuery || undefined,
+      composerId: filterComposerId,
+      catalogSystem: filterCatalogSystem || undefined,
+      page: next,
     });
   };
 
@@ -154,6 +177,7 @@ export function WorksTab() {
         query: searchQuery || undefined,
         composerId: filterComposerId,
         catalogSystem: filterCatalogSystem || undefined,
+        page,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create work');
@@ -185,6 +209,7 @@ export function WorksTab() {
         query: searchQuery || undefined,
         composerId: filterComposerId,
         catalogSystem: filterCatalogSystem || undefined,
+        page,
       });
 
       // Refresh details if viewing this work
@@ -703,49 +728,51 @@ export function WorksTab() {
           <table className="w-full">
             <thead className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-600 dark:text-zinc-400">
               <tr>
-                <th className="px-4 py-2 text-left">Composer</th>
-                <th className="px-4 py-2 text-left">Title</th>
-                <th className="px-4 py-2 text-left">Catalog</th>
-                <th className="px-4 py-2 text-left">Movements</th>
-                <th className="px-4 py-2 text-left">Recordings</th>
-                <th className="px-4 py-2 text-right">Actions</th>
+                <th className="px-2 py-1 text-left">Composer</th>
+                <th className="px-2 py-1 text-left">Title</th>
+                <th className="px-2 py-1 text-left">Catalog</th>
+                <th className="px-2 py-1 text-left">Movements</th>
+                <th className="px-2 py-1 text-left">Recordings</th>
+                <th className="px-2 py-1 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="text-sm">
+            <tbody className="text-xs">
               {works.map((work) => (
                 <tr key={work.id} className="border-t border-zinc-200 dark:border-zinc-700">
-                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                  <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
                     {work.composerName}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="text-black dark:text-white">{work.title}</div>
+                  <td className="px-2 py-1">
+                    <span className="text-black dark:text-white">{work.title}</span>
                     {work.nickname && (
-                      <div className="text-xs text-zinc-500">&quot;{work.nickname}&quot;</div>
+                      <span className="text-xs text-zinc-500 ml-2">
+                        &quot;{work.nickname}&quot;
+                      </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                  <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
                     {work.catalogSystem && work.catalogNumber
                       ? `${work.catalogSystem} ${work.catalogNumber}`
                       : '-'}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                  <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
                     {work.movementCount}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                  <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
                     {work.recordingCount}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-2 py-1 text-right">
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => handleViewWorkDetails(work.id)}
                         disabled={loadingDetails}
-                        className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                        className="text-xs px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700"
                       >
                         View
                       </button>
                       <button
                         onClick={() => startEditingWork(work)}
-                        className="text-xs px-3 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        className="text-xs px-2 py-0.5 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                       >
                         Edit
                       </button>
@@ -755,6 +782,31 @@ export function WorksTab() {
               ))}
             </tbody>
           </table>
+        )}
+
+        {totalWorks > PAGE_SIZE && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-200 dark:border-zinc-700 text-sm">
+            <div className="text-zinc-600 dark:text-zinc-400">
+              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalWorks)} of{' '}
+              {totalWorks}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => goToPage(page - 1)}
+                disabled={loading || page === 0}
+                className="px-3 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => goToPage(page + 1)}
+                disabled={loading || (page + 1) * PAGE_SIZE >= totalWorks}
+                className="px-3 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
