@@ -73,6 +73,13 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
           if (result.submitted > 0) {
             console.log(`Submitted ${result.submitted} tracks to match queue`);
           }
+          if (result.queuedTrackIds.length > 0) {
+            setQueuedTrackIds((prev) => {
+              const next = new Set(prev);
+              result.queuedTrackIds.forEach((trackId) => next.add(trackId));
+              return next;
+            });
+          }
         }
       } catch (err) {
         console.error('Failed to check matches:', err);
@@ -93,7 +100,11 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
       }
       setQueuedTrackIds((prev) => {
         const next = new Set(prev);
-        next.add(trackId);
+        for (const queuedTrackId of result.queuedTrackIds.length > 0
+          ? result.queuedTrackIds
+          : [trackId]) {
+          next.add(queuedTrackId);
+        }
         return next;
       });
     } catch (err) {

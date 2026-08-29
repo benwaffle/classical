@@ -12,6 +12,7 @@ import {
 } from '@/lib/db/schema';
 import { headers } from 'next/headers';
 import { inArray, eq, sql } from 'drizzle-orm';
+import { enqueueAlbumsForTracks } from '@/lib/match-queue-processor';
 
 export async function getSpotifyToken(): Promise<string> {
   const session = await auth.api.getSession({
@@ -87,8 +88,22 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
   }));
 }
 
-export async function submitToMatchQueue(trackIds: string[]): Promise<{ submitted: number }> {
-  if (trackIds.length === 0) return { submitted: 0 };
+export async function submitToMatchQueue(trackIds: string[]): Promise<{
+  submitted: number;
+  expanded: number;
+  alreadyQueued: number;
+  processingScheduled: number;
+  queuedTrackIds: string[];
+}> {
+  if (trackIds.length === 0) {
+    return {
+      submitted: 0,
+      expanded: 0,
+      alreadyQueued: 0,
+      processingScheduled: 0,
+      queuedTrackIds: [],
+    };
+  }
 
   const session = await auth.api.getSession({
     headers: await headers(),
@@ -98,26 +113,17 @@ export async function submitToMatchQueue(trackIds: string[]): Promise<{ submitte
     throw new Error('Unauthorized');
   }
 
-  // Filter out tracks already in queue
-  const existing = await db
-    .select({ spotifyId: matchQueue.spotifyId })
-    .from(matchQueue)
-    .where(inArray(matchQueue.spotifyId, trackIds));
+  // Queue expansion is intentionally separate from processing because liked-songs loading calls
+  // this automatically. The resumable CLI worker drains the queue explicitly.
+  const enqueueResult = await enqueueAlbumsForTracks(trackIds, session.user.id);
 
-  const existingIds = new Set(existing.map((e) => e.spotifyId));
-  const newTrackIds = trackIds.filter((id) => !existingIds.has(id));
-
-  if (newTrackIds.length === 0) return { submitted: 0 };
-
-  await db.insert(matchQueue).values(
-    newTrackIds.map((id) => ({
-      spotifyId: id,
-      submittedBy: session.user.id,
-      status: 'pending',
-    })),
-  );
-
-  return { submitted: newTrackIds.length };
+  return {
+    submitted: enqueueResult.submitted,
+    expanded: enqueueResult.expanded,
+    alreadyQueued: enqueueResult.alreadyQueued,
+    processingScheduled: 0,
+    queuedTrackIds: enqueueResult.queuedTrackIds,
+  };
 }
 
 export async function getQueuedTrackIds(trackIds: string[]): Promise<string[]> {
@@ -165,7 +171,14 @@ export async function updateMatchQueueStatus(
 ): Promise<void> {
   if (trackIds.length === 0) return;
 
-  await db.update(matchQueue).set({ status }).where(inArray(matchQueue.spotifyId, trackIds));
+  await db
+    .update(matchQueue)
+    .set({
+      status,
+      processedAt: new Date(),
+      errorMessage: status === 'matched' ? null : undefined,
+    })
+    .where(inArray(matchQueue.spotifyId, trackIds));
 }
 
 export interface KnownComposerTrack {

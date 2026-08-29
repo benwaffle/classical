@@ -250,14 +250,28 @@ export const trackMovement = sqliteTable(
   (table) => [primaryKey({ columns: [table.spotifyTrackId, table.movementId] })],
 );
 
-export const matchQueue = sqliteTable('match_queue', {
-  spotifyId: text('spotify_id').primaryKey(),
-  submittedAt: integer('submitted_at', { mode: 'timestamp_ms' })
-    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
-    .notNull(),
-  submittedBy: text('submitted_by').notNull(),
-  status: text('status').notNull(), // "pending", "matched", "failed"
-});
+export const matchQueue = sqliteTable(
+  'match_queue',
+  {
+    spotifyId: text('spotify_id').primaryKey(),
+    spotifyAlbumId: text('spotify_album_id'),
+    submittedAt: integer('submitted_at', { mode: 'timestamp_ms' })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    submittedBy: text('submitted_by').notNull(),
+    status: text('status').notNull(), // "pending", "processing", "matched", "failed", "not_classical"
+    attempts: integer('attempts').default(0).notNull(),
+    lastAttemptAt: integer('last_attempt_at', { mode: 'timestamp_ms' }),
+    processedAt: integer('processed_at', { mode: 'timestamp_ms' }),
+    errorMessage: text('error_message'),
+    claimOwnerId: text('workflow_run_id'), // Legacy physical column name; now used as a claim lease.
+  },
+  (table) => [
+    index('match_queue_status_idx').on(table.status),
+    index('match_queue_album_idx').on(table.spotifyAlbumId),
+    index('match_queue_status_album_idx').on(table.status, table.spotifyAlbumId),
+  ],
+);
 
 /*
  * Classical Music Relations

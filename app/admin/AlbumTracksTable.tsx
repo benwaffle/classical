@@ -10,7 +10,8 @@ import {
   deleteTrackMetadata,
   checkWorksExist,
 } from './actions/ingest-metadata';
-import { parseAlbumTracks, type ClassicalMetadata } from './parse-track';
+import { parseAlbumTracks } from './parse-track';
+import type { ClassicalMetadata } from '@/lib/classical-parser';
 import { Spinner } from './components/Spinner';
 import { toRoman } from './lib/format';
 

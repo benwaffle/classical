@@ -1,9 +1,10 @@
 packages:
   - .
 
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
-
-onlyBuiltDependencies:
-  - better-sqlite3
