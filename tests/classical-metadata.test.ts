@@ -42,6 +42,18 @@ test('extracts labels and renders them exactly once', () => {
     label: 'III.1',
     title: 'Dies irae',
   });
+  assert.deepEqual(normalizeWorkPartFields('4. Largo e spiccato', null), {
+    label: '4',
+    title: 'Largo e spiccato',
+  });
+  assert.deepEqual(normalizeWorkPartFields('Finale. Allegro brillante', null), {
+    label: null,
+    title: 'Finale. Allegro brillante',
+  });
+  assert.deepEqual(normalizeWorkPartFields('Variation 18 (Andante cantabile)', null), {
+    label: 'Variation 18',
+    title: 'Andante cantabile',
+  });
   assert.equal(cleanWorkPartTitle('Fuga', 'Fuga. Allegro, ma non troppo'), 'Allegro, ma non troppo');
   assert.equal(cleanWorkPartTitle('I', 'Introitus'), 'Introitus');
 });

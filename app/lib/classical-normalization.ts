@@ -64,11 +64,30 @@ export function formatWorkPart(label: string | null, title: string | null) {
 }
 
 const DESCRIPTIVE_ROMAN_LABEL =
-  /^((?:[IVXLCDM]+)(?:\.(?:[IVXLCDM]+|\d+))*)[.\s:;-]+(.+)$/iu;
+  /^((?:[IVXLCDM]+)(?:\.(?:[IVXLCDM]+|\d+))*|\d+)[.\s:;-]+(.+)$/iu;
+
+function mergeWorkPartTitle(leakedTitle: string, title: string | null) {
+  if (!title) return leakedTitle;
+  const normalizedLeaked = normalizeMetadataText(leakedTitle);
+  const normalizedTitle = normalizeMetadataText(title);
+  if (normalizedLeaked === normalizedTitle || normalizedTitle.includes(normalizedLeaked)) {
+    return title;
+  }
+  if (normalizedLeaked.includes(normalizedTitle)) return leakedTitle;
+  return `${leakedTitle}: ${title}`;
+}
 
 export function normalizeWorkPartFields(label: string | null, title: string | null) {
   if (!label) return { label, title };
   const trimmedLabel = label.replace(/[\s.:;]+$/gu, '').trim();
+  const variation = trimmedLabel.match(/^((?:Variation|Var\.)\s+\d+)\s*\((.+)\)$/iu);
+  if (variation) {
+    return { label: variation[1], title: mergeWorkPartTitle(variation[2], title) };
+  }
+  const descriptiveFinale = trimmedLabel.match(/^Finale[.\s:;-]+(.+)$/iu);
+  if (descriptiveFinale) {
+    return { label: null, title: mergeWorkPartTitle(trimmedLabel, title) };
+  }
   const match = trimmedLabel.match(DESCRIPTIVE_ROMAN_LABEL);
   if (!match || match[2].length < 2 || /^(?:[IVXLCDM]+|\d+)$/iu.test(match[2])) {
     return { label: trimmedLabel || null, title };
@@ -76,16 +95,7 @@ export function normalizeWorkPartFields(label: string | null, title: string | nu
 
   const structuralLabel = match[1];
   const leakedTitle = match[2].trim();
-  if (!title) return { label: structuralLabel, title: leakedTitle };
-  const normalizedLeaked = normalizeMetadataText(leakedTitle);
-  const normalizedTitle = normalizeMetadataText(title);
-  if (normalizedLeaked === normalizedTitle || normalizedTitle.includes(normalizedLeaked)) {
-    return { label: structuralLabel, title };
-  }
-  if (normalizedLeaked.includes(normalizedTitle)) {
-    return { label: structuralLabel, title: leakedTitle };
-  }
-  return { label: structuralLabel, title: `${leakedTitle}: ${title}` };
+  return { label: structuralLabel, title: mergeWorkPartTitle(leakedTitle, title) };
 }
 
 export function cleanWorkPartLabel(label: string | null, title: string | null) {
