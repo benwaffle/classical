@@ -11,7 +11,7 @@ import {
 import { parseAlbumTracksV2, type ClassicalMetadata } from '@/lib/classical-parser';
 import { saveTrackMetadataInternal } from '@/lib/track-metadata-save';
 import { ensureWorkCatalogV2, saveParsedAlbumV2 } from '@/lib/work-parts-v2';
-import { and, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Track } from '@spotify/web-api-ts-sdk';
 
 export type MatchQueueStatus = 'pending' | 'processing' | 'matched' | 'failed' | 'not_classical';
@@ -36,6 +36,13 @@ export interface AlbumProcessResult {
 export interface ClaimedAlbum {
   albumId: string;
   trackIds: string[];
+}
+
+export interface QueueWorkerResult {
+  albums: AlbumProcessResult[];
+  recovered: number;
+  retried: number;
+  exhausted: number;
 }
 
 function now() {
@@ -290,6 +297,90 @@ export async function claimNextPendingAlbum(
   }
 
   return null;
+}
+
+export async function prepareMatchQueue(options: {
+  maxAttempts?: number;
+  staleMinutes?: number;
+  retryFailed?: boolean;
+} = {}) {
+  const maxAttempts = options.maxAttempts ?? 5;
+  const staleMinutes = options.staleMinutes ?? 30;
+  const staleBefore = new Date(Date.now() - staleMinutes * 60_000);
+
+  const recovered = await db
+    .update(matchQueue)
+    .set({ status: 'pending', claimOwnerId: null })
+    .where(
+      and(
+        eq(matchQueue.status, 'processing'),
+        or(isNull(matchQueue.lastAttemptAt), lt(matchQueue.lastAttemptAt, staleBefore)),
+      ),
+    )
+    .returning({ spotifyId: matchQueue.spotifyId });
+
+  const retried = options.retryFailed
+    ? await db
+        .update(matchQueue)
+        .set({ status: 'pending', processedAt: null, claimOwnerId: null })
+        .where(and(eq(matchQueue.status, 'failed'), lt(matchQueue.attempts, maxAttempts)))
+        .returning({ spotifyId: matchQueue.spotifyId })
+    : [];
+
+  const exhausted = await db
+    .update(matchQueue)
+    .set({
+      status: 'failed',
+      processedAt: now(),
+      errorMessage: sql`coalesce(${matchQueue.errorMessage}, 'Maximum processing attempts reached')`,
+    })
+    .where(and(eq(matchQueue.status, 'pending'), gte(matchQueue.attempts, maxAttempts)))
+    .returning({ spotifyId: matchQueue.spotifyId });
+
+  return {
+    recovered: recovered.length,
+    retried: retried.length,
+    exhausted: exhausted.length,
+  };
+}
+
+export async function processNextPendingAlbum(
+  claimOwnerId: string,
+  maxAttempts = 5,
+): Promise<AlbumProcessResult | null> {
+  const claim = await claimNextPendingAlbum(claimOwnerId, maxAttempts);
+  if (!claim) return null;
+  return processQueuedAlbum(claim.albumId, claimOwnerId, claim.trackIds);
+}
+
+export async function runMatchQueueWorker(options: {
+  maxAlbums?: number;
+  maxAttempts?: number;
+  recover?: boolean;
+  retryFailed?: boolean;
+  staleMinutes?: number;
+} = {}): Promise<QueueWorkerResult> {
+  const maxAlbums = options.maxAlbums ?? 1;
+  const maxAttempts = options.maxAttempts ?? 5;
+  const prepared = options.recover
+    ? await prepareMatchQueue({
+        maxAttempts,
+        staleMinutes: options.staleMinutes,
+        retryFailed: options.retryFailed,
+      })
+    : { recovered: 0, retried: 0, exhausted: 0 };
+  const albums: AlbumProcessResult[] = [];
+
+  for (let index = 0; index < maxAlbums; index++) {
+    const result = await processNextPendingAlbum(
+      `queue-vercel-${crypto.randomUUID()}`,
+      maxAttempts,
+    );
+    if (!result) break;
+    albums.push(result);
+  }
+
+  return { albums, ...prepared };
 }
 
 export async function claimPendingAlbum(

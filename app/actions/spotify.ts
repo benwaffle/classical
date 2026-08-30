@@ -15,8 +15,9 @@ import {
   trackWorkPartV2,
 } from '@/lib/db/schema';
 import { headers } from 'next/headers';
+import { after } from 'next/server';
 import { and, inArray, eq, sql } from 'drizzle-orm';
-import { enqueueAlbumsForTracks } from '@/lib/match-queue-processor';
+import { enqueueAlbumsForTracks, runMatchQueueWorker } from '@/lib/match-queue-processor';
 
 export async function getSpotifyToken(): Promise<string> {
   const session = await auth.api.getSession({
@@ -159,15 +160,24 @@ export async function submitToMatchQueue(trackIds: string[]): Promise<{
     throw new Error('Unauthorized');
   }
 
-  // Queue expansion is intentionally separate from processing because liked-songs loading calls
-  // this automatically. The resumable CLI worker drains the queue explicitly.
   const enqueueResult = await enqueueAlbumsForTracks(trackIds, session.user.id);
+  const processingScheduled = enqueueResult.submitted > 0 ? 1 : 0;
+
+  if (processingScheduled) {
+    after(async () => {
+      try {
+        await runMatchQueueWorker({ maxAlbums: 1 });
+      } catch (error) {
+        console.error('Background match-queue processing failed:', error);
+      }
+    });
+  }
 
   return {
     submitted: enqueueResult.submitted,
     expanded: enqueueResult.expanded,
     alreadyQueued: enqueueResult.alreadyQueued,
-    processingScheduled: 0,
+    processingScheduled,
     queuedTrackIds: enqueueResult.queuedTrackIds,
   };
 }

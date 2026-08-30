@@ -20,6 +20,7 @@ import {
   collapseCartesianPartAssignments,
   selectRecordingMatch,
 } from '@/lib/recording-matching';
+import { upsertWork } from '@/app/admin/actions/spotify-utils';
 
 export type V2TrackInput = {
   id: string;
@@ -62,6 +63,20 @@ export async function ensureWorkCatalogV2(
     .onConflictDoNothing();
 }
 
+async function createWorkFromParsedMetadata(composerId: number, metadata: ClassicalMetadataV2) {
+  const workId = await upsertWork({
+    composerId,
+    title: metadata.formalName.trim(),
+    nickname: metadata.nickname,
+    catalogSystem: metadata.catalogSystem,
+    catalogNumber: metadata.catalogNumber,
+    yearComposed: metadata.yearComposed,
+    form: metadata.form,
+  });
+  await ensureWorkCatalogV2(workId, metadata.catalogSystem, metadata.catalogNumber);
+  return workId;
+}
+
 async function resolveComposerId(name: string | null) {
   if (!name) return null;
   const normalizedName = normalizeMetadataText(name.split('(')[0]);
@@ -85,9 +100,48 @@ async function resolveComposerId(name: string | null) {
   return partial.length === 1 ? partial[0].id : null;
 }
 
-export async function resolveWorkV2(metadata: ClassicalMetadataV2) {
+function titlesAreCompatible(left: string, right: string) {
+  const normalizedLeft = normalizeMetadataText(left);
+  const normalizedRight = normalizeMetadataText(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (
+    normalizedLeft === normalizedRight ||
+    normalizedLeft.includes(normalizedRight) ||
+    normalizedRight.includes(normalizedLeft)
+  ) {
+    return true;
+  }
+  const leftTokens = new Set(normalizedLeft.split(' ').filter((token) => token.length > 1));
+  const rightTokens = new Set(normalizedRight.split(' ').filter((token) => token.length > 1));
+  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return intersection / Math.max(leftTokens.size, rightTokens.size) >= 0.6;
+}
+
+function isLessSpecificThanPreferred(candidateTitle: string, preferredTitle: string) {
+  const candidateTokens = normalizeMetadataText(candidateTitle).split(' ').filter(Boolean);
+  const preferredTokens = normalizeMetadataText(preferredTitle).split(' ').filter(Boolean);
+  return candidateTokens.length <= preferredTokens.length;
+}
+
+export async function resolveWorkV2(
+  metadata: ClassicalMetadataV2,
+  preferredWorkId?: number | null,
+) {
   const composerId = await resolveComposerId(metadata.composerName);
   if (!composerId) return null;
+
+  const [preferredWork] = preferredWorkId
+    ? await db
+        .select({ id: work.id, composerId: work.composerId, title: work.title })
+        .from(work)
+        .where(eq(work.id, preferredWorkId))
+        .limit(1)
+    : [];
+  const compatiblePreferredWork =
+    preferredWork?.composerId === composerId &&
+    titlesAreCompatible(preferredWork.title, metadata.formalName)
+      ? preferredWork
+      : null;
 
   if (metadata.catalogSystem && metadata.catalogNumber) {
     const candidates = await db
@@ -135,6 +189,36 @@ export async function resolveWorkV2(metadata: ClassicalMetadataV2) {
     );
     if (exact.length === 1) return exact[0].id;
     if (canonicalCandidates.length === 1) return canonicalCandidates[0].id;
+    if (compatiblePreferredWork) {
+      const preferredAudit = await db
+        .select({ targetId: metadataMigrationAudit.targetId })
+        .from(metadataMigrationAudit)
+        .where(
+          and(
+            eq(metadataMigrationAudit.entityType, 'work'),
+            eq(metadataMigrationAudit.sourceId, String(compatiblePreferredWork.id)),
+          ),
+        )
+        .limit(1);
+      const canonicalPreferredId = preferredAudit[0]?.targetId
+        ? Number(preferredAudit[0].targetId)
+        : compatiblePreferredWork.id;
+      if (
+        canonicalCandidates.length === 0 ||
+        canonicalCandidates.some((candidate) => candidate.id === canonicalPreferredId)
+      ) {
+        return canonicalPreferredId;
+      }
+    }
+    if (canonicalCandidates.length === 0) {
+      if (
+        preferredWork &&
+        isLessSpecificThanPreferred(metadata.formalName, preferredWork.title)
+      ) {
+        return null;
+      }
+      return createWorkFromParsedMetadata(composerId, metadata);
+    }
     return null;
   }
 
@@ -144,10 +228,19 @@ export async function resolveWorkV2(metadata: ClassicalMetadataV2) {
     .where(eq(work.composerId, composerId));
   const title = normalizeMetadataText(metadata.formalName);
   const exact = candidates.filter((candidate) => normalizeMetadataText(candidate.title) === title);
-  return exact.length === 1 ? exact[0].id : null;
+  if (exact.length === 1) return exact[0].id;
+  if (compatiblePreferredWork) return compatiblePreferredWork.id;
+  if (preferredWork && isLessSpecificThanPreferred(metadata.formalName, preferredWork.title)) {
+    return null;
+  }
+  return createWorkFromParsedMetadata(composerId, metadata);
 }
 
-async function resolveWorkPart(workId: number, candidate: ClassicalMetadataV2['parts'][number]) {
+async function resolveWorkPart(
+  workId: number,
+  candidate: ClassicalMetadataV2['parts'][number],
+  preferredPartId?: number,
+) {
   candidate = {
     ...candidate,
     label: candidate.label?.trim() || null,
@@ -176,6 +269,17 @@ async function resolveWorkPart(workId: number, candidate: ClassicalMetadataV2['p
     ? existing.filter((part) => normalizeMetadataText(part.title) === normalizedTitle)
     : [];
   if (titleMatches.length === 1) return preserveCanonicalPosition(titleMatches[0]);
+
+  const preferredPart = preferredPartId
+    ? existing.find((part) => part.id === preferredPartId)
+    : undefined;
+  if (preferredPart) {
+    await db
+      .update(workPartV2)
+      .set({ label: candidate.label, title: candidate.title })
+      .where(eq(workPartV2.id, preferredPart.id));
+    return { id: preferredPart.id, status: 'confirmed' as const };
+  }
 
   const occupant = existing.find((part) => part.position === candidate.position);
   const occupantHasMatchingLabel =
@@ -257,13 +361,56 @@ export async function saveParsedAlbumV2(
   tracks: V2TrackInput[],
   parsed: ClassicalMetadataV2[],
 ) {
-  const resolved = await Promise.all(
-    tracks.map(async (track, index) => ({
+  const currentAssignments =
+    tracks.length > 0
+      ? await db
+          .select({
+            spotifyTrackId: recordingTrackV2.spotifyTrackId,
+            workId: recordingV2.workId,
+          })
+          .from(recordingTrackV2)
+          .innerJoin(recordingV2, eq(recordingTrackV2.recordingId, recordingV2.id))
+          .where(inArray(recordingTrackV2.spotifyTrackId, tracks.map((track) => track.id)))
+      : [];
+  const currentWorkByTrackId = new Map(
+    currentAssignments.map((assignment) => [assignment.spotifyTrackId, assignment.workId]),
+  );
+  const currentPartAssignments =
+    tracks.length > 0
+      ? await db
+          .select({
+            spotifyTrackId: trackWorkPartV2.spotifyTrackId,
+            partId: workPartV2.id,
+            position: workPartV2.position,
+          })
+          .from(trackWorkPartV2)
+          .innerJoin(workPartV2, eq(trackWorkPartV2.workPartId, workPartV2.id))
+          .where(inArray(trackWorkPartV2.spotifyTrackId, tracks.map((track) => track.id)))
+      : [];
+  const currentPartsByTrackId = new Map<string, Array<{ id: number; position: number }>>();
+  for (const assignment of currentPartAssignments) {
+    const parts = currentPartsByTrackId.get(assignment.spotifyTrackId) ?? [];
+    parts.push({ id: assignment.partId, position: assignment.position });
+    currentPartsByTrackId.set(assignment.spotifyTrackId, parts);
+  }
+  for (const parts of currentPartsByTrackId.values()) {
+    parts.sort((left, right) => left.position - right.position);
+  }
+  const resolved: Array<{
+    track: V2TrackInput;
+    metadata: ClassicalMetadataV2;
+    workId: number | null;
+  }> = [];
+  for (let index = 0; index < tracks.length; index++) {
+    const track = tracks[index];
+    resolved.push({
       track,
       metadata: parsed[index],
-      workId: parsed[index]?.isClassical ? await resolveWorkV2(parsed[index]) : null,
-    })),
-  );
+      workId: parsed[index]?.isClassical
+        ? await resolveWorkV2(parsed[index], currentWorkByTrackId.get(track.id))
+        : null,
+    });
+  }
   const groups = new Map<string, typeof resolved>();
   const groupRepresentatives: Array<{
     key: string;
@@ -328,8 +475,16 @@ export async function saveParsedAlbumV2(
         continue;
       }
       const links = new Map<number, typeof trackWorkPartV2.$inferInsert>();
-      for (const part of item.metadata.parts) {
-        const resolvedPart = await resolveWorkPart(workId, part);
+      const preferredParts = currentPartsByTrackId.get(item.track.id) ?? [];
+      for (let partIndex = 0; partIndex < item.metadata.parts.length; partIndex++) {
+        const part = item.metadata.parts[partIndex];
+        const resolvedPart = await resolveWorkPart(
+          workId,
+          part,
+          preferredParts.length === item.metadata.parts.length
+            ? preferredParts[partIndex]?.id
+            : undefined,
+        );
         links.set(resolvedPart.id, {
           spotifyTrackId: item.track.id,
           workPartId: resolvedPart.id,

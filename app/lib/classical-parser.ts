@@ -72,7 +72,9 @@ const classicalMetadataV2Schema = z.object({
   recordingGroup: z
     .string()
     .nullable()
-    .describe('Album-local identifier shared only by tracks from the same performance'),
+    .describe(
+      'For every classical track, a non-empty album-local identifier shared only by tracks from the same performance. Null only when isClassical is false',
+    ),
   parts: z
     .array(workPartSchema)
     .describe('Zero or more canonical leaf parts performed by this Spotify track'),
@@ -270,7 +272,7 @@ export async function parseAlbumTracksV2(
       try {
         const result = await generateText({
           model: PARSER_MODEL,
-          prompt: `Parse the requested tracks from the album "${albumName}". The complete album outline is provided so recording groups stay stable across batches:\n\n${albumOutline}\n\nReturn objects only for these requested inputs:\n${trackList}\n\n${WORK_PART_PARSING_RULES}\n\nUse exactly the same descriptive recordingGroup text anywhere the same performance appears in the album, including across requested batches; base it on work and performers rather than the batch number. Separate performances of the same work require different groups. For a primary composer with a completion or arrangement credit, put only the primary composer in composerName. Copy inputIndex exactly.`,
+          prompt: `Parse the requested tracks from the album "${albumName}". The complete album outline is provided so recording groups stay stable across batches:\n\n${albumOutline}\n\nReturn objects only for these requested inputs:\n${trackList}\n\n${WORK_PART_PARSING_RULES}\n\nEvery classical track must have a non-empty recordingGroup. Use exactly the same descriptive recordingGroup text anywhere the same performance appears in the album, including across requested batches; base it on work and performers rather than the batch number. Separate performances of the same work require different groups. For a primary composer with a completion or arrangement credit, put only the primary composer in composerName. formalName must identify the complete work represented by the track, not an album collection, excerpt heading, or movement. Copy inputIndex exactly.`,
           output: Output.object({ schema: albumBatchV2Schema }),
         });
         output = result.output;

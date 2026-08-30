@@ -32,6 +32,11 @@ interface SpotifyAlbumResponse extends SpotifyAlbumMetadata {
 
 let cachedToken: { accessToken: string; expiresAt: number } | null = null;
 const artistSearchCache = new Map<string, Promise<SpotifyArtistMetadata | null>>();
+let spotifyBlockedUntil = 0;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function normalizeArtistName(name: string) {
   return name
@@ -78,16 +83,30 @@ async function getSpotifyAppAccessToken() {
 }
 
 async function spotifyFetch<T>(path: string): Promise<T> {
-  const accessToken = await getSpotifyAppAccessToken();
-  const response = await fetch(`https://api.spotify.com/v1${path}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const waitMs = spotifyBlockedUntil - Date.now();
+    if (waitMs > 0) await sleep(waitMs);
 
-  if (!response.ok) {
+    const accessToken = await getSpotifyAppAccessToken();
+    const response = await fetch(`https://api.spotify.com/v1${path}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (response.ok) return response.json() as Promise<T>;
+
+    if (response.status === 429) {
+      const retryAfterSeconds = Number(response.headers.get('retry-after') ?? 5);
+      const retryAfterMs = Math.max(1, retryAfterSeconds) * 1_000;
+      spotifyBlockedUntil = Math.max(spotifyBlockedUntil, Date.now() + retryAfterMs);
+      if (attempt < 3) continue;
+    } else if (response.status >= 500 && attempt < 3) {
+      await sleep(1_000 * 2 ** attempt);
+      continue;
+    }
+
     throw new Error(`Spotify API request failed (${response.status}) for ${path}`);
   }
-
-  return response.json() as Promise<T>;
+  throw new Error(`Spotify API request retries exhausted for ${path}`);
 }
 
 export async function getSpotifyTracksByIds(trackIds: string[]) {
