@@ -16,6 +16,7 @@ import { toRoman } from '@/lib/classical-normalization';
 import { ensureWorkCatalogV2 } from '@/lib/work-parts-v2';
 
 export interface TrackMetadataSaveInput {
+  preserveExistingWork?: boolean;
   album: {
     id: string;
     name: string;
@@ -166,6 +167,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     catalogNumber: metadata.catalogNumber,
     yearComposed: metadata.yearComposed,
     form: metadata.form,
+    preserveExisting: data.preserveExistingWork,
   });
 
   await ensureWorkCatalogV2(workId, metadata.catalogSystem, metadata.catalogNumber);

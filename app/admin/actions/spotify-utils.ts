@@ -27,8 +27,18 @@ export async function upsertWork(data: {
   catalogNumber: string | null;
   yearComposed: number | null;
   form: string | null;
+  preserveExisting?: boolean;
 }) {
-  const { composerId, title, nickname, catalogSystem, catalogNumber, yearComposed, form } = data;
+  const {
+    composerId,
+    title,
+    nickname,
+    catalogSystem,
+    catalogNumber,
+    yearComposed,
+    form,
+    preserveExisting,
+  } = data;
   let existingWork: WorkRow | undefined;
 
   if (catalogSystem && catalogNumber) {
@@ -52,6 +62,7 @@ export async function upsertWork(data: {
   }
 
   if (existingWork) {
+    if (preserveExisting) return existingWork.id;
     await db
       .update(work)
       .set({

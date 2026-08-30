@@ -514,6 +514,7 @@ async function saveParsedTrack(
   }
 
   const saved = await saveTrackMetadataInternal({
+    preserveExistingWork: true,
     album: {
       id: album.id,
       name: album.name,
@@ -699,6 +700,18 @@ export async function processQueuedAlbum(
         })),
         eligibleParsed,
       );
+      await db
+        .update(trackWorkPartV2)
+        .set({ matchStatus: 'needs_review' })
+        .where(
+          and(
+            inArray(
+              trackWorkPartV2.spotifyTrackId,
+              eligibleTracks.map((track) => track.id),
+            ),
+            eq(trackWorkPartV2.matchSource, 'manual'),
+          ),
+        );
       if (synthesizedPartTrackIds.size > 0) {
         await db
           .update(trackWorkPartV2)
