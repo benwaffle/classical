@@ -35,4 +35,8 @@ The user should be able to search for composer or work.
 
 Use `turso db shell spotify-classical "<query>"` to execute SQL queries
 
-Take a backup of the DB before mutating prod data or schema.
+## Tips
+
+- Take a backup of the DB before mutating prod data or schema.
+- Short downtime is OK, I'm the only user.
+- We're doing CI/CD, so prod deploys are done by landing commits on main
