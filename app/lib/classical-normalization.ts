@@ -63,11 +63,35 @@ export function formatWorkPart(label: string | null, title: string | null) {
   return title ?? (label ? `${label}.` : '');
 }
 
+const DESCRIPTIVE_ROMAN_LABEL =
+  /^((?:[IVXLCDM]+)(?:\.(?:[IVXLCDM]+|\d+))*)[.\s:;-]+(.+)$/iu;
+
+export function normalizeWorkPartFields(label: string | null, title: string | null) {
+  if (!label) return { label, title };
+  const trimmedLabel = label.replace(/[\s.:;]+$/gu, '').trim();
+  const match = trimmedLabel.match(DESCRIPTIVE_ROMAN_LABEL);
+  if (!match || match[2].length < 2 || /^(?:[IVXLCDM]+|\d+)$/iu.test(match[2])) {
+    return { label: trimmedLabel || null, title };
+  }
+
+  const structuralLabel = match[1];
+  const leakedTitle = match[2].trim();
+  if (!title) return { label: structuralLabel, title: leakedTitle };
+  const normalizedLeaked = normalizeMetadataText(leakedTitle);
+  const normalizedTitle = normalizeMetadataText(title);
+  if (normalizedLeaked === normalizedTitle || normalizedTitle.includes(normalizedLeaked)) {
+    return { label: structuralLabel, title };
+  }
+  if (normalizedLeaked.includes(normalizedTitle)) {
+    return { label: structuralLabel, title: leakedTitle };
+  }
+  return { label: structuralLabel, title: `${leakedTitle}: ${title}` };
+}
+
 export function cleanWorkPartLabel(label: string | null, title: string | null) {
-  if (!label) return label;
-  let trimmedLabel = label.replace(/[\s.:;]+$/gu, '').trim();
-  const descriptiveRomanLabel = trimmedLabel.match(/^([IVXLCDM]+)[\s.:;-]+([^\d].*)$/iu);
-  if (descriptiveRomanLabel) trimmedLabel = descriptiveRomanLabel[1];
+  const normalized = normalizeWorkPartFields(label, title);
+  if (!normalized.label) return normalized.label;
+  const trimmedLabel = normalized.label;
   if (!title) return trimmedLabel || null;
   const normalizedLabel = normalizeMetadataText(trimmedLabel);
   const normalizedTitle = normalizeMetadataText(title);

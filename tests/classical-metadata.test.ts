@@ -6,6 +6,7 @@ import {
   cleanWorkPartTitle,
   normalizeCatalogNumber,
   normalizeCatalogSystem,
+  normalizeWorkPartFields,
   splitPartLabel,
   toRoman,
 } from '../app/lib/classical-normalization';
@@ -29,6 +30,18 @@ test('extracts labels and renders them exactly once', () => {
   assert.equal(cleanWorkPartLabel('III.', 'Dies irae'), 'III');
   assert.equal(cleanWorkPartLabel('III. Menuetto', 'Allegro molto e vivace'), 'III');
   assert.equal(cleanWorkPartLabel('III.1', 'Dies irae'), 'III.1');
+  assert.deepEqual(normalizeWorkPartFields('I. Allegro', null), {
+    label: 'I',
+    title: 'Allegro',
+  });
+  assert.deepEqual(normalizeWorkPartFields('III. Menuetto', 'Allegro molto'), {
+    label: 'III',
+    title: 'Menuetto: Allegro molto',
+  });
+  assert.deepEqual(normalizeWorkPartFields('III.1', 'Dies irae'), {
+    label: 'III.1',
+    title: 'Dies irae',
+  });
   assert.equal(cleanWorkPartTitle('Fuga', 'Fuga. Allegro, ma non troppo'), 'Allegro, ma non troppo');
   assert.equal(cleanWorkPartTitle('I', 'Introitus'), 'Introitus');
 });
