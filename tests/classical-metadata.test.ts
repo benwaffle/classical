@@ -9,7 +9,10 @@ import {
   splitPartLabel,
   toRoman,
 } from '../app/lib/classical-normalization';
-import { selectRecordingMatch } from '../app/lib/recording-matching';
+import {
+  collapseCartesianPartAssignments,
+  selectRecordingMatch,
+} from '../app/lib/recording-matching';
 
 test('normalizes catalog punctuation without changing display data', () => {
   assert.equal(normalizeCatalogSystem('K.'), normalizeCatalogSystem(' K '));
@@ -62,4 +65,27 @@ test('uses a unique greatest overlap and rejects ties', () => {
     ),
     null,
   );
+});
+
+test('collapses an exact Cartesian track-to-part assignment', () => {
+  const parts = [
+    { position: 1, label: 'I', title: 'Allegro' },
+    { position: 2, label: 'II', title: 'Larghetto' },
+    { position: 3, label: 'III', title: 'Rondo' },
+  ];
+  assert.deepEqual(collapseCartesianPartAssignments([parts, parts, parts]), [
+    [parts[0]],
+    [parts[1]],
+    [parts[2]],
+  ]);
+});
+
+test('preserves genuine combined and asymmetric part assignments', () => {
+  const first = [
+    { position: 1, label: 'I', title: 'Prelude' },
+    { position: 2, label: 'II', title: 'Fugue' },
+  ];
+  const second = [{ position: 3, label: 'III', title: 'Finale' }];
+  assert.deepEqual(collapseCartesianPartAssignments([first]), [first]);
+  assert.deepEqual(collapseCartesianPartAssignments([first, second]), [first, second]);
 });

@@ -18,7 +18,10 @@ import {
   normalizeMetadataText,
 } from '@/lib/classical-normalization';
 import type { ClassicalMetadataV2 } from '@/lib/classical-parser';
-import { selectRecordingMatch } from '@/lib/recording-matching';
+import {
+  collapseCartesianPartAssignments,
+  selectRecordingMatch,
+} from '@/lib/recording-matching';
 
 export type V2TrackInput = {
   id: string;
@@ -177,31 +180,8 @@ async function resolveWorkPart(workId: number, candidate: ClassicalMetadataV2['p
   const existing = await db.select().from(workPartV2).where(eq(workPartV2.workId, workId));
   const normalizedTitle = normalizeMetadataText(candidate.title);
   const normalizedLabel = normalizeMetadataText(candidate.label);
-  const moveOccupantAside = async (occupantId: number) => {
-    const usedPositions = new Set(existing.map((part) => part.position));
-    let temporaryPosition = 1_000_000 + occupantId;
-    while (usedPositions.has(temporaryPosition)) temporaryPosition += 1;
-    await db
-      .update(workPartV2)
-      .set({ position: temporaryPosition })
-      .where(eq(workPartV2.id, occupantId));
-  };
-  const moveMatchIntoCanonicalPosition = async (part: (typeof existing)[number]) => {
-    if (part.position !== candidate.position) {
-      const occupant = existing.find(
-        (existingPart) =>
-          existingPart.position === candidate.position && existingPart.id !== part.id,
-      );
-      if (occupant) await moveOccupantAside(occupant.id);
-      await db
-        .update(workPartV2)
-        .set({
-          position: candidate.position,
-          label: candidate.label ?? part.label,
-          title: candidate.title,
-        })
-        .where(eq(workPartV2.id, part.id));
-    } else if (candidate.label || candidate.title) {
+  const preserveCanonicalPosition = async (part: (typeof existing)[number]) => {
+    if (candidate.label || candidate.title) {
       await db
         .update(workPartV2)
         .set({ label: candidate.label ?? part.label, title: candidate.title })
@@ -214,12 +194,12 @@ async function resolveWorkPart(workId: number, candidate: ClassicalMetadataV2['p
       normalizeMetadataText(part.title) === normalizedTitle &&
       normalizeMetadataText(part.label) === normalizedLabel,
   );
-  if (exact.length === 1) return moveMatchIntoCanonicalPosition(exact[0]);
+  if (exact.length === 1) return preserveCanonicalPosition(exact[0]);
 
   const titleMatches = normalizedTitle
     ? existing.filter((part) => normalizeMetadataText(part.title) === normalizedTitle)
     : [];
-  if (titleMatches.length === 1) return moveMatchIntoCanonicalPosition(titleMatches[0]);
+  if (titleMatches.length === 1) return preserveCanonicalPosition(titleMatches[0]);
 
   const occupant = existing.find((part) => part.position === candidate.position);
   if (
@@ -235,17 +215,24 @@ async function resolveWorkPart(workId: number, candidate: ClassicalMetadataV2['p
     return { id: occupant.id, status: 'confirmed' as const };
   }
 
-  if (occupant) await moveOccupantAside(occupant.id);
+  const usedPositions = new Set(existing.map((part) => part.position));
+  let position = candidate.position;
+  let status: 'confirmed' | 'needs_review' = 'confirmed';
+  if (occupant) {
+    position = Math.max(0, ...usedPositions) + 1;
+    while (usedPositions.has(position)) position += 1;
+    status = 'needs_review';
+  }
   const [created] = await db
     .insert(workPartV2)
     .values({
       workId,
-      position: candidate.position,
+      position,
       label: candidate.label,
       title: candidate.title,
     })
     .returning({ id: workPartV2.id });
-  return { id: created.id, status: 'confirmed' as const };
+  return { id: created.id, status };
 }
 
 async function reconcileRecording(spotifyAlbumId: string, workId: number, trackIds: string[]) {
@@ -338,6 +325,12 @@ export async function saveParsedAlbumV2(
       (a, b) =>
         a.track.discNumber - b.track.discNumber || a.track.trackNumber - b.track.trackNumber,
     );
+    const collapsedPartSets = collapseCartesianPartAssignments(
+      ordered.map((item) => item.metadata.parts),
+    );
+    ordered.forEach((item, index) => {
+      item.metadata.parts = collapsedPartSets[index];
+    });
     await reconcileRecording(
       spotifyAlbumId,
       workId,
