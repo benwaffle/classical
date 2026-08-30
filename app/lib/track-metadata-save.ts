@@ -1,12 +1,19 @@
 import { db } from '@/lib/db';
-import { composer, spotifyAlbum, spotifyArtist, spotifyTrack, trackArtists } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
 import {
-  linkTrackMovement,
-  upsertMovement,
-  upsertRecording,
-  upsertWork,
-} from '@/app/admin/actions/spotify-utils';
+  composer,
+  recordingTrackV2,
+  recordingV2,
+  spotifyAlbum,
+  spotifyArtist,
+  spotifyTrack,
+  trackArtists,
+  trackWorkPartV2,
+  workPartV2,
+} from '@/lib/db/schema';
+import { and, eq, max, sql } from 'drizzle-orm';
+import { upsertWork } from '@/app/admin/actions/spotify-utils';
+import { splitPartLabel } from '@/lib/classical-normalization';
+import { ensureWorkCatalogV2 } from '@/lib/work-parts-v2';
 
 export interface TrackMetadataSaveInput {
   album: {
@@ -22,6 +29,7 @@ export interface TrackMetadataSaveInput {
     name: string;
     uri: string;
     duration_ms: number;
+    disc_number: number;
     track_number: number;
     popularity: number;
     inSpotifyTracksTable: boolean;
@@ -121,6 +129,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
       spotifyId: track.id,
       title: track.name,
       trackNumber: track.track_number,
+      discNumber: track.disc_number,
       durationMs: track.duration_ms,
       popularity: track.popularity,
       spotifyAlbumId: album.id,
@@ -130,6 +139,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
       set: {
         title: track.name,
         trackNumber: track.track_number,
+        discNumber: track.disc_number,
         durationMs: track.duration_ms,
         popularity: track.popularity,
         spotifyAlbumId: album.id,
@@ -158,21 +168,67 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     form: metadata.form,
   });
 
-  const movementId = await upsertMovement({
-    workId,
-    number: metadata.movementNumber,
-    title: metadata.movementName,
-  });
+  await ensureWorkCatalogV2(workId, metadata.catalogSystem, metadata.catalogNumber);
+  const split = splitPartLabel(metadata.movementNumber, metadata.movementName);
+  let [part] = await db
+    .select({ id: workPartV2.id })
+    .from(workPartV2)
+    .where(
+      and(
+        eq(workPartV2.workId, workId),
+        eq(workPartV2.position, metadata.movementNumber),
+      ),
+    )
+    .limit(1);
+  if (!part) {
+    [part] = await db
+      .insert(workPartV2)
+      .values({
+        workId,
+        position: metadata.movementNumber,
+        label: split.label,
+        title: split.title,
+      })
+      .returning({ id: workPartV2.id });
+  }
 
-  const recordingId = await upsertRecording({
-    spotifyAlbumId: album.id,
-    workId,
-  });
-
-  await linkTrackMovement({
+  let [recordingRow] = await db
+    .select({ id: recordingV2.id })
+    .from(recordingV2)
+    .where(and(eq(recordingV2.spotifyAlbumId, album.id), eq(recordingV2.workId, workId)))
+    .orderBy(sql`(SELECT count(*) FROM recording_track_v2 WHERE recording_id = ${recordingV2.id}) DESC`)
+    .limit(1);
+  if (!recordingRow) {
+    [recordingRow] = await db
+      .insert(recordingV2)
+      .values({ spotifyAlbumId: album.id, workId, popularity: null })
+      .returning({ id: recordingV2.id });
+  }
+  const [{ maximum }] = await db
+    .select({ maximum: max(recordingTrackV2.position) })
+    .from(recordingTrackV2)
+    .where(eq(recordingTrackV2.recordingId, recordingRow.id));
+  await db
+    .insert(recordingTrackV2)
+    .values({
+      recordingId: recordingRow.id,
+      spotifyTrackId: track.id,
+      position: (maximum ?? 0) + 1,
+    })
+    .onConflictDoNothing();
+  await db.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, track.id));
+  await db.insert(trackWorkPartV2).values({
     spotifyTrackId: track.id,
-    movementId,
+    workPartId: part.id,
+    matchSource: 'manual',
+    matchStatus: 'confirmed',
   });
 
-  return { success: true, workId, movementId, recordingId, composerId };
+  return {
+    success: true,
+    workId,
+    movementId: part.id,
+    recordingId: recordingRow.id,
+    composerId,
+  };
 }

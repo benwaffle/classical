@@ -1,7 +1,13 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { trackMovement, work, movement } from '@/lib/db/schema';
+import {
+  recordingTrackV2,
+  trackWorkPartV2,
+  work,
+  workCatalogV2,
+  workPartV2,
+} from '@/lib/db/schema';
 import { eq, inArray } from 'drizzle-orm';
 import { checkAuth } from './auth';
 import { saveTrackMetadataInternal, type TrackMetadataSaveInput } from '@/lib/track-metadata-save';
@@ -24,13 +30,14 @@ export async function checkWorksExist(
     const allWorks = await db
       .select({
         id: work.id,
-        catalogSystem: work.catalogSystem,
-        catalogNumber: work.catalogNumber,
+        catalogSystem: workCatalogV2.system,
+        catalogNumber: workCatalogV2.number,
       })
       .from(work)
+      .innerJoin(workCatalogV2, eq(workCatalogV2.workId, work.id))
       .where(
         inArray(
-          work.catalogSystem,
+          workCatalogV2.system,
           queries.map((q) => q.catalogSystem),
         ),
       );
@@ -57,12 +64,12 @@ export async function checkWorksExist(
     if (matchingWorkIds.length > 0) {
       const movements = await db
         .select({
-          workId: movement.workId,
-          number: movement.number,
-          title: movement.title,
+          workId: workPartV2.workId,
+          number: workPartV2.position,
+          title: workPartV2.title,
         })
-        .from(movement)
-        .where(inArray(movement.workId, matchingWorkIds));
+        .from(workPartV2)
+        .where(inArray(workPartV2.workId, matchingWorkIds));
 
       for (const m of movements) {
         for (const value of Object.values(result)) {
@@ -84,11 +91,14 @@ export async function deleteTrackMetadata(spotifyTrackId: string) {
   await checkAuth();
 
   try {
-    await db.delete(trackMovement).where(eq(trackMovement.spotifyTrackId, spotifyTrackId));
+    await db.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, spotifyTrackId));
+    await db
+      .delete(recordingTrackV2)
+      .where(eq(recordingTrackV2.spotifyTrackId, spotifyTrackId));
 
     return {
       success: true,
-      message: 'Track-movement link removed, ready for re-analysis',
+      message: 'Track work-part link removed, ready for re-analysis',
     };
   } catch (error) {
     console.error('Error removing track-movement link:', error);

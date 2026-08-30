@@ -9,7 +9,14 @@ import type {
   RecordingRow,
 } from './schema-types';
 import { db } from '@/lib/db';
-import { composer, movement, recording, trackMovement, work } from '@/lib/db/schema';
+import {
+  composer,
+  recordingTrackV2,
+  recordingV2,
+  trackWorkPartV2,
+  work,
+  workPartV2,
+} from '@/lib/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
 
 export async function upsertWork(data: {
@@ -75,72 +82,6 @@ export async function upsertWork(data: {
   return created.id;
 }
 
-export async function upsertMovement(data: {
-  workId: number;
-  number: number;
-  title: string | null;
-}) {
-  const { workId, number, title } = data;
-  const [existingMovement] = await db
-    .select()
-    .from(movement)
-    .where(and(eq(movement.workId, workId), eq(movement.number, number)))
-    .limit(1);
-
-  if (existingMovement) {
-    await db.update(movement).set({ title }).where(eq(movement.id, existingMovement.id));
-    return existingMovement.id;
-  }
-
-  const [created] = await db
-    .insert(movement)
-    .values({
-      workId,
-      number,
-      title,
-    })
-    .returning({ id: movement.id });
-
-  return created.id;
-}
-
-export async function upsertRecording(data: { spotifyAlbumId: string; workId: number }) {
-  const { spotifyAlbumId, workId } = data;
-  const [existingRecording] = await db
-    .select()
-    .from(recording)
-    .where(and(eq(recording.spotifyAlbumId, spotifyAlbumId), eq(recording.workId, workId)))
-    .limit(1);
-
-  if (existingRecording) {
-    return existingRecording.id;
-  }
-
-  const [created] = await db
-    .insert(recording)
-    .values({
-      spotifyAlbumId,
-      workId,
-      popularity: null,
-    })
-    .returning({ id: recording.id });
-
-  return created.id;
-}
-
-export async function linkTrackMovement(data: { spotifyTrackId: string; movementId: number }) {
-  const { spotifyTrackId, movementId } = data;
-  await db
-    .insert(trackMovement)
-    .values({
-      spotifyTrackId,
-      movementId,
-      startMs: null,
-      endMs: null,
-    })
-    .onConflictDoNothing();
-}
-
 export async function loadTrackDbContext(spotifyTrackIds: string[]) {
   if (spotifyTrackIds.length === 0) {
     return {
@@ -152,10 +93,12 @@ export async function loadTrackDbContext(spotifyTrackIds: string[]) {
     };
   }
 
-  const trackMovementRecords = await db
+  const trackMovementRecords = (
+    await db
     .select()
-    .from(trackMovement)
-    .where(inArray(trackMovement.spotifyTrackId, spotifyTrackIds));
+    .from(trackWorkPartV2)
+    .where(inArray(trackWorkPartV2.spotifyTrackId, spotifyTrackIds))
+  ).map((row) => ({ ...row, movementId: row.workPartId }));
 
   if (trackMovementRecords.length === 0) {
     return {
@@ -168,7 +111,9 @@ export async function loadTrackDbContext(spotifyTrackIds: string[]) {
   }
 
   const movementIds = trackMovementRecords.map((tm) => tm.movementId);
-  const movementsData = await db.select().from(movement).where(inArray(movement.id, movementIds));
+  const movementsData = (
+    await db.select().from(workPartV2).where(inArray(workPartV2.id, movementIds))
+  ).map((row) => ({ ...row, number: row.position }));
 
   const workIds = movementsData.map((m) => m.workId);
   const worksData =
@@ -182,7 +127,16 @@ export async function loadTrackDbContext(spotifyTrackIds: string[]) {
 
   const recordingsData =
     workIds.length > 0
-      ? await db.select().from(recording).where(inArray(recording.workId, workIds))
+      ? await db
+          .select({
+            id: recordingV2.id,
+            spotifyAlbumId: recordingV2.spotifyAlbumId,
+            workId: recordingV2.workId,
+            popularity: recordingV2.popularity,
+          })
+          .from(recordingTrackV2)
+          .innerJoin(recordingV2, eq(recordingTrackV2.recordingId, recordingV2.id))
+          .where(inArray(recordingTrackV2.spotifyTrackId, spotifyTrackIds))
       : [];
 
   return {

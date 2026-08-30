@@ -10,9 +10,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "queue:drain": "tsx scripts/drain-match-queue.ts",
+    "metadata:v2": "tsx scripts/migrate-work-parts.ts",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "tsx scripts/migrate-db.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
   },

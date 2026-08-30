@@ -34,3 +34,5 @@ The user should be able to search for composer or work.
 ## Tools
 
 Use `turso db shell spotify-classical "<query>"` to execute SQL queries
+
+Take a backup of the DB before mutating prod data or schema.

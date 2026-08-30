@@ -1,10 +1,27 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { composer, movement, recording, spotifyAlbum, trackMovement, work } from '@/lib/db/schema';
+import {
+  composer,
+  recordingV2,
+  spotifyAlbum,
+  trackWorkPartV2,
+  work,
+  workPartV2,
+  workCatalogV2,
+} from '@/lib/db/schema';
 import { and, count, eq, like, or, sql } from 'drizzle-orm';
 import { checkAuth } from './auth';
-import type { ComposerRow, MovementRow, RecordingRow, WorkRow } from './schema-types';
+import type { ComposerRow, RecordingRow, WorkRow } from './schema-types';
+import { normalizeCatalogNumber, normalizeCatalogSystem } from '@/lib/classical-normalization';
+
+export type AdminWorkPart = {
+  id: number;
+  workId: number;
+  position: number;
+  label: string | null;
+  title: string | null;
+};
 
 export interface WorkWithDetails extends WorkRow {
   composerName: string;
@@ -52,8 +69,8 @@ export async function searchWorks(
       yearComposed: work.yearComposed,
       form: work.form,
       composerName: composer.name,
-      movementCount: sql<number>`(SELECT COUNT(*) FROM movement WHERE movement.work_id = ${work.id})`,
-      recordingCount: sql<number>`(SELECT COUNT(*) FROM recording WHERE recording.work_id = ${work.id})`,
+      movementCount: sql<number>`(SELECT COUNT(*) FROM work_part_v2 WHERE work_part_v2.work_id = ${work.id})`,
+      recordingCount: sql<number>`(SELECT COUNT(*) FROM recording_v2 WHERE recording_v2.work_id = ${work.id})`,
     })
     .from(work)
     .innerJoin(composer, eq(work.composerId, composer.id))
@@ -72,7 +89,7 @@ export async function searchWorks(
 export async function getWorkWithDetails(workId: number): Promise<{
   work: WorkRow;
   composer: ComposerRow;
-  movements: MovementRow[];
+  movements: AdminWorkPart[];
   recordings: Array<RecordingRow & { albumTitle: string }>;
 } | null> {
   await checkAuth();
@@ -88,21 +105,21 @@ export async function getWorkWithDetails(workId: number): Promise<{
 
   const movementsData = await db
     .select()
-    .from(movement)
-    .where(eq(movement.workId, workId))
-    .orderBy(movement.number);
+    .from(workPartV2)
+    .where(eq(workPartV2.workId, workId))
+    .orderBy(workPartV2.position);
 
   const recordingsData = await db
     .select({
-      id: recording.id,
-      spotifyAlbumId: recording.spotifyAlbumId,
-      workId: recording.workId,
-      popularity: recording.popularity,
+      id: recordingV2.id,
+      spotifyAlbumId: recordingV2.spotifyAlbumId,
+      workId: recordingV2.workId,
+      popularity: recordingV2.popularity,
       albumTitle: spotifyAlbum.title,
     })
-    .from(recording)
-    .innerJoin(spotifyAlbum, eq(recording.spotifyAlbumId, spotifyAlbum.spotifyId))
-    .where(eq(recording.workId, workId));
+    .from(recordingV2)
+    .innerJoin(spotifyAlbum, eq(recordingV2.spotifyAlbumId, spotifyAlbum.spotifyId))
+    .where(eq(recordingV2.workId, workId));
 
   return {
     work: workRow,
@@ -136,6 +153,17 @@ export async function createWork(data: {
     })
     .returning();
 
+  if (data.catalogSystem && data.catalogNumber) {
+    await db.insert(workCatalogV2).values({
+      workId: result.id,
+      system: data.catalogSystem,
+      number: data.catalogNumber,
+      normalizedSystem: normalizeCatalogSystem(data.catalogSystem),
+      normalizedNumber: normalizeCatalogNumber(data.catalogNumber),
+      isPrimary: true,
+    });
+  }
+
   return result;
 }
 
@@ -166,48 +194,53 @@ export async function updateWorkDetails(
     throw new Error('Work not found');
   }
 
+  if (
+    data.catalogSystem !== undefined &&
+    data.catalogNumber !== undefined
+  ) {
+    await db.delete(workCatalogV2).where(eq(workCatalogV2.workId, workId));
+    if (data.catalogSystem && data.catalogNumber) {
+      await db.insert(workCatalogV2).values({
+        workId,
+        system: data.catalogSystem,
+        number: data.catalogNumber,
+        normalizedSystem: normalizeCatalogSystem(data.catalogSystem),
+        normalizedNumber: normalizeCatalogNumber(data.catalogNumber),
+        isPrimary: true,
+      });
+    }
+  }
+
   return result;
 }
 
 export async function addMovementToWork(
   workId: number,
-  number: number,
+  position: number,
+  label?: string | null,
   title?: string | null,
-): Promise<MovementRow> {
+): Promise<AdminWorkPart> {
   await checkAuth();
 
   const [result] = await db
-    .insert(movement)
-    .values({
-      workId,
-      number,
-      title: title ?? null,
-    })
+    .insert(workPartV2)
+    .values({ workId, position, label: label ?? null, title: title ?? null })
     .returning();
-
   return result;
 }
 
 export async function updateMovementDetails(
   movementId: number,
-  data: { number?: number; title?: string | null },
-): Promise<MovementRow> {
+  data: { position?: number; label?: string | null; title?: string | null },
+): Promise<AdminWorkPart> {
   await checkAuth();
 
-  const updateData: Partial<typeof movement.$inferInsert> = {};
-  if (data.number !== undefined) updateData.number = data.number;
-  if (data.title !== undefined) updateData.title = data.title;
-
   const [result] = await db
-    .update(movement)
-    .set(updateData)
-    .where(eq(movement.id, movementId))
+    .update(workPartV2)
+    .set(data)
+    .where(eq(workPartV2.id, movementId))
     .returning();
-
-  if (!result) {
-    throw new Error('Movement not found');
-  }
-
+  if (!result) throw new Error('Work part not found');
   return result;
 }
 
@@ -216,13 +249,9 @@ export async function deleteMovement(movementId: number): Promise<void> {
 
   const [linkedTrack] = await db
     .select()
-    .from(trackMovement)
-    .where(eq(trackMovement.movementId, movementId))
+    .from(trackWorkPartV2)
+    .where(eq(trackWorkPartV2.workPartId, movementId))
     .limit(1);
-
-  if (linkedTrack) {
-    throw new Error('Cannot delete movement: tracks are linked to it');
-  }
-
-  await db.delete(movement).where(eq(movement.id, movementId));
+  if (linkedTrack) throw new Error('Cannot delete work part: tracks are linked to it');
+  await db.delete(workPartV2).where(eq(workPartV2.id, movementId));
 }

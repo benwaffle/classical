@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { composer, matchQueue, trackMovement } from '@/lib/db/schema';
+import { composer, matchQueue, trackWorkPartV2 } from '@/lib/db/schema';
 import {
   getSpotifyAlbumMetadata,
   getSpotifyAlbumTrackIds,
@@ -8,8 +8,9 @@ import {
   findSpotifyArtistByName,
   type SpotifyArtistMetadata,
 } from '@/lib/spotify-app-client';
-import { parseAlbumTracks, type ClassicalMetadata } from '@/lib/classical-parser';
+import { parseAlbumTracksV2, type ClassicalMetadata } from '@/lib/classical-parser';
 import { saveTrackMetadataInternal } from '@/lib/track-metadata-save';
+import { ensureWorkCatalogV2, saveParsedAlbumV2 } from '@/lib/work-parts-v2';
 import { and, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { Track } from '@spotify/web-api-ts-sdk';
 
@@ -35,22 +36,6 @@ export interface AlbumProcessResult {
 export interface ClaimedAlbum {
   albumId: string;
   trackIds: string[];
-}
-
-let metadataSaveTail = Promise.resolve();
-
-async function withMetadataSaveLock<T>(action: () => Promise<T>) {
-  const previous = metadataSaveTail;
-  let release!: () => void;
-  metadataSaveTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous;
-  try {
-    return await action();
-  } finally {
-    release();
-  }
 }
 
 function now() {
@@ -96,37 +81,6 @@ function normalizeArtistName(name: string) {
     .replace(/\p{Pd}/gu, '-')
     .trim()
     .toLowerCase();
-}
-
-function metadataWorkKey(metadata: ClassicalMetadata) {
-  return [
-    metadata.composerName?.trim().toLowerCase() ?? '',
-    metadata.catalogSystem?.trim().toLowerCase() ?? '',
-    metadata.catalogNumber?.trim().toLowerCase() ?? '',
-    metadata.formalName.trim().toLowerCase(),
-  ].join('|');
-}
-
-function getMovementNumber(
-  track: Track,
-  metadata: ClassicalMetadata,
-  parsedByTrackId: Map<string, ClassicalMetadata>,
-  tracks: Track[],
-) {
-  if (metadata.movement) return metadata.movement;
-
-  const key = metadataWorkKey(metadata);
-  const sameWorkTracks = tracks
-    .filter((candidate) => {
-      const candidateMetadata = parsedByTrackId.get(candidate.id);
-      return candidateMetadata && metadataWorkKey(candidateMetadata) === key;
-    })
-    .sort(compareTrackOrder);
-
-  if (sameWorkTracks.length <= 1) return 1;
-
-  const position = sameWorkTracks.findIndex((candidate) => candidate.id === track.id);
-  return position >= 0 ? position + 1 : 1;
 }
 
 async function setQueueStatus(
@@ -398,9 +352,9 @@ async function getLinkedTrackIds(trackIds: string[]) {
   if (trackIds.length === 0) return new Set<string>();
 
   const linkedRows = await db
-    .select({ spotifyTrackId: trackMovement.spotifyTrackId })
-    .from(trackMovement)
-    .where(inArray(trackMovement.spotifyTrackId, trackIds));
+    .select({ spotifyTrackId: trackWorkPartV2.spotifyTrackId })
+    .from(trackWorkPartV2)
+    .where(inArray(trackWorkPartV2.spotifyTrackId, trackIds));
 
   return new Set(linkedRows.map((row) => row.spotifyTrackId));
 }
@@ -411,17 +365,21 @@ async function saveParsedTrack(
   metadata: ClassicalMetadata,
   movementNumber: number,
 ) {
-  const composerName = metadata.composerName?.trim();
+  let composerName = metadata.composerName?.trim();
   const formalName = metadata.formalName.trim();
 
-  if (!metadata.isClassical) return 'not_classical' as const;
+  if (!metadata.isClassical) return { status: 'not_classical' as const };
   if (!composerName || !formalName) {
     throw new Error('Parsed metadata is missing composer or work title');
   }
 
-  const creditedComposerArtist = track.artists.find(
-    (artist) => normalizeArtistName(artist.name) === normalizeArtistName(composerName),
+  const parsedComposerNames = composerName
+    .split(/\s+(?:&|and)\s+/iu)
+    .map((name) => normalizeArtistName(name));
+  const creditedComposerArtist = track.artists.find((artist) =>
+    parsedComposerNames.includes(normalizeArtistName(artist.name)),
   );
+  if (creditedComposerArtist) composerName = creditedComposerArtist.name;
   let composerArtist: SpotifyArtistMetadata | undefined = creditedComposerArtist
     ? { id: creditedComposerArtist.id, name: creditedComposerArtist.name }
     : undefined;
@@ -464,7 +422,7 @@ async function saveParsedTrack(
     throw new Error(`Could not resolve Spotify artist for composer "${composerName}"`);
   }
 
-  await saveTrackMetadataInternal({
+  const saved = await saveTrackMetadataInternal({
     album: {
       id: album.id,
       name: album.name,
@@ -478,6 +436,7 @@ async function saveParsedTrack(
       name: track.name,
       uri: track.uri,
       duration_ms: track.duration_ms,
+      disc_number: track.disc_number,
       track_number: track.track_number,
       popularity: track.popularity,
       inSpotifyTracksTable: false,
@@ -505,7 +464,7 @@ async function saveParsedTrack(
     },
   });
 
-  return 'matched' as const;
+  return { status: 'matched' as const, ...saved };
 }
 
 export async function processQueuedAlbum(
@@ -585,52 +544,93 @@ export async function processQueuedAlbum(
 
     if (unknownTracks.length === 0) return result;
 
-    const parsed = await parseAlbumTracks(
-      album.name,
-      unknownTracks.map((track) => ({
-        trackName: track.name,
-        artistNames: track.artists.map((artist) => artist.name),
-      })),
-    );
-    const parsedByTrackId = new Map(unknownTracks.map((track, index) => [track.id, parsed[index]]));
-
-    await withMetadataSaveLock(async () => {
-      for (const track of unknownTracks) {
-        const metadata = parsedByTrackId.get(track.id);
-        if (!metadata) {
-          await setQueueStatus([track.id], 'failed', {
-            claimOwnerId,
-            errorMessage: 'No parsed metadata returned for track',
-          });
-          result.errors.push({
-            trackId: track.id,
-            message: 'No parsed metadata returned for track',
-          });
-          result.failed++;
+    {
+      const parsedV2 = await parseAlbumTracksV2(
+        album.name,
+        unknownTracks.map((track) => ({
+          trackName: track.name,
+          artistNames: track.artists.map((artist) => artist.name),
+          discNumber: track.disc_number,
+          trackNumber: track.track_number,
+        })),
+      );
+      const savedTrackIds = new Set<string>();
+      const synthesizedPartTrackIds = new Set<string>();
+      for (let index = 0; index < unknownTracks.length; index++) {
+        const track = unknownTracks[index];
+        const metadata = parsedV2[index];
+        if (!metadata?.isClassical) {
+          await setQueueStatus([track.id], 'not_classical', { claimOwnerId });
+          result.notClassical++;
           continue;
         }
-
+        if (metadata.parts.length === 0) {
+          metadata.parts = [{ position: 1, label: null, title: metadata.formalName }];
+          synthesizedPartTrackIds.add(track.id);
+        }
+        const firstPart = metadata.parts[0];
+        const legacyMetadata: ClassicalMetadata = {
+          isClassical: true,
+          composerName: metadata.composerName,
+          formalName: metadata.formalName,
+          nickname: metadata.nickname,
+          catalogSystem: metadata.catalogSystem,
+          catalogNumber: metadata.catalogNumber,
+          form: metadata.form,
+          movement: firstPart.position,
+          movementName: firstPart.title,
+          yearComposed: metadata.yearComposed,
+        };
         try {
-          const movementNumber = getMovementNumber(track, metadata, parsedByTrackId, unknownTracks);
-          const status = await saveParsedTrack(album, track, metadata, movementNumber);
-          await setQueueStatus([track.id], status, { claimOwnerId });
-
-          if (status === 'matched') result.matched++;
-          if (status === 'not_classical') result.notClassical++;
+          const saved = await saveParsedTrack(album, track, legacyMetadata, firstPart.position);
+          if (saved.status === 'matched') {
+            savedTrackIds.add(track.id);
+            await ensureWorkCatalogV2(saved.workId, metadata.catalogSystem, metadata.catalogNumber);
+          }
         } catch (error) {
-          const message = errorMessage(error, 'Failed to save parsed metadata');
-          const status = isRetryableProcessingError(message) ? 'pending' : 'failed';
-          await setQueueStatus([track.id], status, {
+          await setQueueStatus([track.id], 'failed', {
             claimOwnerId,
-            errorMessage: message,
+            errorMessage: errorMessage(error, 'Failed to save v2 base metadata'),
           });
-          result.errors.push({ trackId: track.id, message, retryable: status === 'pending' });
-          if (status === 'failed') result.failed++;
+          result.failed++;
         }
       }
-    });
+      const eligibleTracks = unknownTracks.filter((track) => savedTrackIds.has(track.id));
+      const eligibleParsed = unknownTracks.flatMap((track, index) =>
+        savedTrackIds.has(track.id) ? [parsedV2[index]] : [],
+      );
+      const savedV2 = await saveParsedAlbumV2(
+        album.id,
+        eligibleTracks.map((track) => ({
+          id: track.id,
+          discNumber: track.disc_number,
+          trackNumber: track.track_number,
+        })),
+        eligibleParsed,
+      );
+      if (synthesizedPartTrackIds.size > 0) {
+        await db
+          .update(trackWorkPartV2)
+          .set({ matchStatus: 'needs_review' })
+          .where(inArray(trackWorkPartV2.spotifyTrackId, [...synthesizedPartTrackIds]));
+      }
+      for (const track of eligibleTracks) {
+        const [link] = await db
+          .select({ id: trackWorkPartV2.spotifyTrackId })
+          .from(trackWorkPartV2)
+          .where(eq(trackWorkPartV2.spotifyTrackId, track.id))
+          .limit(1);
+        if (link) {
+          await setQueueStatus([track.id], 'matched', { claimOwnerId });
+          result.matched++;
+        }
+      }
+      if (savedV2.unresolved > 0) {
+        result.errors.push({ message: `${savedV2.unresolved} v2 work assignments need review` });
+      }
+      return result;
+    }
 
-    return result;
   } catch (error) {
     const message = errorMessage(error, 'Failed to process album');
     const status = isRetryableProcessingError(message) ? 'pending' : 'failed';

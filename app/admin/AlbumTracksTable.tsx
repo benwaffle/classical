@@ -317,6 +317,7 @@ export function AlbumTracksTable({
           name: track.name,
           uri: track.uri,
           duration_ms: track.duration_ms,
+          disc_number: track.disc_number,
           track_number: track.track_number,
           popularity: track.popularity,
           inSpotifyTracksTable: track.inSpotifyTracksTable,

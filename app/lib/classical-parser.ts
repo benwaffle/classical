@@ -44,6 +44,35 @@ const classicalMetadataSchema = z.object({
 
 export type ClassicalMetadata = z.infer<typeof classicalMetadataSchema>;
 
+const workPartSchema = z.object({
+  position: z.number().int().positive().describe('Canonical leaf-part order within the work'),
+  label: z
+    .string()
+    .nullable()
+    .describe("Printed structural label such as 'III.2', 'Act I', or 'Var. 4', without the title"),
+  title: z.string().nullable().describe("Clean leaf title such as 'Tuba mirum', without its label"),
+});
+
+const classicalMetadataV2Schema = z.object({
+  isClassical: z.boolean(),
+  composerName: classicalMetadataSchema.shape.composerName,
+  formalName: classicalMetadataSchema.shape.formalName,
+  nickname: classicalMetadataSchema.shape.nickname,
+  catalogSystem: classicalMetadataSchema.shape.catalogSystem,
+  catalogNumber: classicalMetadataSchema.shape.catalogNumber,
+  form: classicalMetadataSchema.shape.form,
+  yearComposed: classicalMetadataSchema.shape.yearComposed,
+  recordingGroup: z
+    .string()
+    .nullable()
+    .describe('Album-local identifier shared only by tracks from the same performance'),
+  parts: z
+    .array(workPartSchema)
+    .describe('Zero or more canonical leaf parts performed by this Spotify track'),
+});
+
+export type ClassicalMetadataV2 = z.infer<typeof classicalMetadataV2Schema>;
+
 const indexedClassicalMetadataSchema = classicalMetadataSchema.extend({
   inputIndex: z.number().int().positive().describe('The 1-based input track number'),
 });
@@ -51,6 +80,12 @@ const indexedClassicalMetadataSchema = classicalMetadataSchema.extend({
 const albumBatchSchema = z.object({
   tracks: z.array(indexedClassicalMetadataSchema),
 });
+
+const indexedClassicalMetadataV2Schema = classicalMetadataV2Schema.extend({
+  inputIndex: z.number().int().positive(),
+});
+
+const albumBatchV2Schema = z.object({ tracks: z.array(indexedClassicalMetadataV2Schema) });
 
 type TrackInput = { trackName: string; artistNames: string[] };
 const MAX_TRACKS_PER_PARSE = 20;
@@ -65,6 +100,19 @@ function isRateLimitError(error: unknown) {
     message.includes('rate limit') ||
     message.includes('rate-limit') ||
     message.includes('too many requests')
+  );
+}
+
+function isRetryableParserError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    isRateLimitError(error) ||
+    message.includes('gateway request failed') ||
+    message.includes('gatewayresponseerror') ||
+    message.includes('timeout') ||
+    message.includes('timed out') ||
+    /\b5\d\d\b/u.test(message)
   );
 }
 
@@ -112,8 +160,8 @@ Return one object for every input track. Copy each track's numeric prefix into i
       break;
     } catch (error) {
       const backoffMs = RATE_LIMIT_BACKOFF_MS[attempt];
-      if (!isRateLimitError(error) || backoffMs === undefined) throw error;
-      console.warn(`AI rate limit; retrying this parse chunk in ${backoffMs / 1000}s.`);
+      if (!isRetryableParserError(error) || backoffMs === undefined) throw error;
+      console.warn(`AI gateway retry in ${backoffMs / 1000}s.`);
       await sleep(backoffMs);
     }
   }
@@ -162,5 +210,62 @@ export async function parseAlbumTracks(
     parsedByIndex.set(inputIndex, metadata);
   }
 
+  return indexedTracks.map(({ inputIndex }) => parsedByIndex.get(inputIndex)!);
+}
+
+export async function parseAlbumTracksV2(
+  albumName: string,
+  tracks: Array<TrackInput & { discNumber: number; trackNumber: number }>,
+): Promise<ClassicalMetadataV2[]> {
+  if (tracks.length === 0) return [];
+
+  const indexedTracks = tracks.map((track, index) => ({ inputIndex: index + 1, track }));
+  const parsedByIndex = new Map<number, ClassicalMetadataV2>();
+  const albumOutline = indexedTracks
+    .map(
+      ({ inputIndex, track }) =>
+        `${inputIndex}. [disc ${track.discNumber}, track ${track.trackNumber}] "${track.trackName}" (${track.artistNames.join(', ')})`,
+    )
+    .join('\n');
+
+  for (let offset = 0; offset < indexedTracks.length; offset += MAX_TRACKS_PER_PARSE) {
+    const batch = indexedTracks.slice(offset, offset + MAX_TRACKS_PER_PARSE);
+    const trackList = batch
+      .map(
+        ({ inputIndex, track }) =>
+          `${inputIndex}. [disc ${track.discNumber}, track ${track.trackNumber}] "${track.trackName}" (${track.artistNames.join(', ')})`,
+      )
+      .join('\n');
+    let output: z.infer<typeof albumBatchV2Schema> | undefined;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = await generateText({
+          model: PARSER_MODEL,
+          prompt: `Parse the requested tracks from the album "${albumName}". The complete album outline is provided so recording groups stay stable across batches:\n\n${albumOutline}\n\nReturn objects only for these requested inputs:\n${trackList}\n\nA work part is a canonical leaf unit, so "III. Sequentia: 2. Tuba mirum" is its own part, distinct from the other Sequentia parts. A Spotify track may contain several parts. Keep labels out of titles. Preserve the complete printed structural label in label whenever present: Tuba mirum is label "III.2", not "IV"; Hostias is "IV.2", not "X". Position is the 1-based FLATTENED LEAF ORDER across the complete work, not the numeric value of a printed Roman section label: in Mozart's Requiem, VIII. Communio follows the six Sequentia leaves and two Offertorium leaves, so it is position 14, not position 8. Use exactly the same descriptive recordingGroup text anywhere the same performance appears in the album, including across requested batches; base it on work and performers rather than the batch number. Separate performances of the same work require different groups. For a primary composer with a completion or arrangement credit, put only the primary composer in composerName. Copy inputIndex exactly.`,
+          output: Output.object({ schema: albumBatchV2Schema }),
+        });
+        output = result.output;
+        if (process.env.CLASSICAL_PARSER_DEBUG === '1') {
+          console.log('AI Album V2 Batch Response:', JSON.stringify(output, null, 2));
+        }
+        break;
+      } catch (error) {
+        const backoffMs = RATE_LIMIT_BACKOFF_MS[attempt];
+        if (!isRetryableParserError(error) || backoffMs === undefined) throw error;
+        console.warn(`AI gateway retry in ${backoffMs / 1000}s.`);
+        await sleep(backoffMs);
+      }
+    }
+    for (const { inputIndex, ...metadata } of output.tracks) {
+      if (inputIndex >= 1 && inputIndex <= tracks.length) parsedByIndex.set(inputIndex, metadata);
+    }
+  }
+
+  const missing = indexedTracks.filter(({ inputIndex }) => !parsedByIndex.has(inputIndex));
+  if (missing.length > 0) {
+    throw new Error(
+      `No v2 parsed metadata returned for input tracks ${missing.map((t) => t.inputIndex).join(', ')}`,
+    );
+  }
   return indexedTracks.map(({ inputIndex }) => parsedByIndex.get(inputIndex)!);
 }

@@ -206,12 +206,138 @@ export const spotifyTrack = sqliteTable('spotify_track', {
   spotifyId: text('spotify_id').primaryKey(),
   title: text('title').notNull(),
   trackNumber: integer('track_number').notNull(),
+  discNumber: integer('disc_number').default(1).notNull(),
   durationMs: integer('duration_ms').notNull(),
   popularity: integer('popularity'),
   spotifyAlbumId: text('spotify_album_id')
     .notNull()
     .references(() => spotifyAlbum.spotifyId),
 });
+
+/**
+ * Parallel v2 metadata tables. These intentionally coexist with movement,
+ * track_movement, and recording until the migration has been validated.
+ */
+export const workCatalogV2 = sqliteTable(
+  'work_catalog_v2',
+  {
+    id: integer('id').primaryKey(),
+    workId: integer('work_id')
+      .notNull()
+      .references(() => work.id),
+    system: text('system').notNull(),
+    number: text('number').notNull(),
+    normalizedSystem: text('normalized_system').notNull(),
+    normalizedNumber: text('normalized_number').notNull(),
+    isPrimary: integer('is_primary', { mode: 'boolean' }).default(false).notNull(),
+  },
+  (table) => [
+    index('work_catalog_v2_work_idx').on(table.workId),
+    index('work_catalog_v2_lookup_idx').on(table.normalizedSystem, table.normalizedNumber),
+    uniqueIndex('work_catalog_v2_work_catalog_idx').on(
+      table.workId,
+      table.normalizedSystem,
+      table.normalizedNumber,
+    ),
+  ],
+);
+
+export const workPartV2 = sqliteTable(
+  'work_part_v2',
+  {
+    id: integer('id').primaryKey(),
+    workId: integer('work_id')
+      .notNull()
+      .references(() => work.id),
+    position: integer('position').notNull(),
+    label: text('label'),
+    title: text('title'),
+  },
+  (table) => [
+    index('work_part_v2_work_idx').on(table.workId),
+    uniqueIndex('work_part_v2_work_position_idx').on(table.workId, table.position),
+  ],
+);
+
+export const recordingV2 = sqliteTable(
+  'recording_v2',
+  {
+    id: integer('id').primaryKey(),
+    spotifyAlbumId: text('spotify_album_id')
+      .notNull()
+      .references(() => spotifyAlbum.spotifyId),
+    workId: integer('work_id')
+      .notNull()
+      .references(() => work.id),
+    popularity: integer('popularity'),
+  },
+  (table) => [
+    index('recording_v2_work_idx').on(table.workId),
+    index('recording_v2_album_idx').on(table.spotifyAlbumId),
+  ],
+);
+
+export const recordingTrackV2 = sqliteTable(
+  'recording_track_v2',
+  {
+    recordingId: integer('recording_id')
+      .notNull()
+      .references(() => recordingV2.id),
+    spotifyTrackId: text('spotify_track_id')
+      .notNull()
+      .references(() => spotifyTrack.spotifyId),
+    position: integer('position').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.recordingId, table.spotifyTrackId] }),
+    uniqueIndex('recording_track_v2_track_idx').on(table.spotifyTrackId),
+    uniqueIndex('recording_track_v2_position_idx').on(table.recordingId, table.position),
+  ],
+);
+
+export const trackWorkPartV2 = sqliteTable(
+  'track_work_part_v2',
+  {
+    spotifyTrackId: text('spotify_track_id')
+      .notNull()
+      .references(() => spotifyTrack.spotifyId),
+    workPartId: integer('work_part_id')
+      .notNull()
+      .references(() => workPartV2.id),
+    startMs: integer('start_ms'),
+    endMs: integer('end_ms'),
+    matchSource: text('match_source', { enum: ['parser', 'migrated', 'manual'] })
+      .default('migrated')
+      .notNull(),
+    matchStatus: text('match_status', { enum: ['confirmed', 'needs_review'] })
+      .default('needs_review')
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.spotifyTrackId, table.workPartId] }),
+    index('track_work_part_v2_part_idx').on(table.workPartId),
+    index('track_work_part_v2_status_idx').on(table.matchStatus),
+  ],
+);
+
+export const metadataMigrationAudit = sqliteTable(
+  'metadata_migration_audit',
+  {
+    id: integer('id').primaryKey(),
+    entityType: text('entity_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    targetId: text('target_id'),
+    decision: text('decision').notNull(),
+    reason: text('reason'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex('metadata_migration_audit_entity_source_idx').on(table.entityType, table.sourceId),
+    index('metadata_migration_audit_decision_idx').on(table.decision),
+  ],
+);
 
 export const spotifyArtist = sqliteTable('spotify_artist', {
   spotifyId: text('spotify_id').primaryKey(),

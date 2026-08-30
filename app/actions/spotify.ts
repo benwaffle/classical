@@ -3,15 +3,18 @@
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import {
-  trackMovement,
   matchQueue,
-  movement,
   work,
   composer,
   spotifyArtist,
+  recordingV2,
+  recordingTrackV2,
+  workPartV2,
+  workCatalogV2,
+  trackWorkPartV2,
 } from '@/lib/db/schema';
 import { headers } from 'next/headers';
-import { inArray, eq, sql } from 'drizzle-orm';
+import { and, inArray, eq, sql } from 'drizzle-orm';
 import { enqueueAlbumsForTracks } from '@/lib/match-queue-processor';
 
 export async function getSpotifyToken(): Promise<string> {
@@ -40,8 +43,14 @@ export async function getSpotifyToken(): Promise<string> {
 
 export interface MatchedTrack {
   trackId: string;
-  movementNumber: number;
-  movementName: string | null;
+  recordingId: number;
+  parts: Array<{
+    id: number;
+    position: number;
+    label: string | null;
+    title: string | null;
+    matchStatus: 'confirmed' | 'needs_review';
+  }>;
   work: {
     id: number;
     title: string;
@@ -55,37 +64,66 @@ export interface MatchedTrack {
 export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack[]> {
   if (trackIds.length === 0) return [];
 
-  const results = await db
-    .select({
-      trackId: trackMovement.spotifyTrackId,
-      movementNumber: movement.number,
-      movementName: movement.title,
-      workId: work.id,
-      workTitle: work.title,
-      catalogSystem: work.catalogSystem,
-      catalogNumber: work.catalogNumber,
-      nickname: work.nickname,
-      composerName: composer.name,
-    })
-    .from(trackMovement)
-    .innerJoin(movement, eq(trackMovement.movementId, movement.id))
-    .innerJoin(work, eq(movement.workId, work.id))
-    .innerJoin(composer, eq(work.composerId, composer.id))
-    .where(inArray(trackMovement.spotifyTrackId, trackIds));
+  const rows = await db
+      .select({
+        trackId: recordingTrackV2.spotifyTrackId,
+        recordingId: recordingV2.id,
+        partId: workPartV2.id,
+        partPosition: workPartV2.position,
+        partLabel: workPartV2.label,
+        partTitle: workPartV2.title,
+        matchStatus: trackWorkPartV2.matchStatus,
+        workId: work.id,
+        workTitle: work.title,
+        catalogSystem: workCatalogV2.system,
+        catalogNumber: workCatalogV2.number,
+        nickname: work.nickname,
+        composerName: composer.name,
+      })
+      .from(recordingTrackV2)
+      .innerJoin(recordingV2, eq(recordingTrackV2.recordingId, recordingV2.id))
+      .innerJoin(work, eq(recordingV2.workId, work.id))
+      .innerJoin(composer, eq(work.composerId, composer.id))
+      .innerJoin(
+        trackWorkPartV2,
+        eq(recordingTrackV2.spotifyTrackId, trackWorkPartV2.spotifyTrackId),
+      )
+      .innerJoin(workPartV2, eq(trackWorkPartV2.workPartId, workPartV2.id))
+      .leftJoin(
+        workCatalogV2,
+        and(eq(workCatalogV2.workId, work.id), eq(workCatalogV2.isPrimary, true)),
+      )
+      .where(inArray(recordingTrackV2.spotifyTrackId, trackIds));
 
-  return results.map((r) => ({
-    trackId: r.trackId,
-    movementNumber: r.movementNumber,
-    movementName: r.movementName,
-    work: {
-      id: r.workId,
-      title: r.workTitle,
-      catalogSystem: r.catalogSystem,
-      catalogNumber: r.catalogNumber,
-      nickname: r.nickname,
-      composerName: r.composerName,
-    },
-  }));
+    const byTrack = new Map<string, MatchedTrack>();
+    for (const row of rows) {
+      const existing = byTrack.get(row.trackId);
+      const part = {
+        id: row.partId,
+        position: row.partPosition,
+        label: row.partLabel,
+        title: row.partTitle,
+        matchStatus: row.matchStatus,
+      };
+      if (existing) existing.parts.push(part);
+      else {
+        byTrack.set(row.trackId, {
+          trackId: row.trackId,
+          recordingId: row.recordingId,
+          parts: [part],
+          work: {
+            id: row.workId,
+            title: row.workTitle,
+            catalogSystem: row.catalogSystem,
+            catalogNumber: row.catalogNumber,
+            nickname: row.nickname,
+            composerName: row.composerName,
+          },
+        });
+      }
+    }
+    for (const item of byTrack.values()) item.parts.sort((a, b) => a.position - b.position);
+  return [...byTrack.values()];
 }
 
 export async function submitToMatchQueue(trackIds: string[]): Promise<{

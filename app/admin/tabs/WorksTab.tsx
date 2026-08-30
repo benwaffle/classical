@@ -10,9 +10,10 @@ import {
   updateMovementDetails,
   deleteMovement,
   type WorkWithDetails,
+  type AdminWorkPart,
 } from '../actions/work-management';
 import { searchComposers } from '../actions/composer-management';
-import type { ComposerRow, MovementRow, RecordingRow } from '../actions/schema-types';
+import type { ComposerRow, RecordingRow } from '../actions/schema-types';
 import { Spinner } from '../components/Spinner';
 import { Notice } from '../components/Notice';
 import { Modal } from '../components/Modal';
@@ -30,7 +31,7 @@ interface WorkDetails {
     form: string | null;
   };
   composer: ComposerRow;
-  movements: MovementRow[];
+  movements: AdminWorkPart[];
   recordings: Array<RecordingRow & { albumTitle: string }>;
 }
 
@@ -66,9 +67,9 @@ export function WorksTab() {
 
   // Movement management
   const [addingMovement, setAddingMovement] = useState(false);
-  const [newMovement, setNewMovement] = useState({ number: '', title: '' });
-  const [editingMovement, setEditingMovement] = useState<MovementRow | null>(null);
-  const [movementForm, setMovementForm] = useState({ number: '', title: '' });
+  const [newMovement, setNewMovement] = useState({ position: '', label: '', title: '' });
+  const [editingMovement, setEditingMovement] = useState<AdminWorkPart | null>(null);
+  const [movementForm, setMovementForm] = useState({ position: '', label: '', title: '' });
 
   // Saving states
   const [saving, setSaving] = useState(false);
@@ -224,7 +225,7 @@ export function WorksTab() {
   };
 
   const handleAddMovement = async () => {
-    if (!selectedWork || !newMovement.number) return;
+    if (!selectedWork || !newMovement.position) return;
 
     setSaving(true);
     setError(null);
@@ -232,13 +233,14 @@ export function WorksTab() {
     try {
       await addMovementToWork(
         selectedWork.work.id,
-        parseInt(newMovement.number),
+        parseInt(newMovement.position),
+        newMovement.label.trim() || null,
         newMovement.title.trim() || null,
       );
 
-      setSuccessMessage(`Added movement ${newMovement.number}`);
+      setSuccessMessage(`Added work part ${newMovement.position}`);
       setAddingMovement(false);
-      setNewMovement({ number: '', title: '' });
+      setNewMovement({ position: '', label: '', title: '' });
       await handleViewWorkDetails(selectedWork.work.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add movement');
@@ -248,20 +250,21 @@ export function WorksTab() {
   };
 
   const handleUpdateMovement = async () => {
-    if (!editingMovement || !movementForm.number) return;
+    if (!editingMovement || !movementForm.position) return;
 
     setSaving(true);
     setError(null);
 
     try {
       await updateMovementDetails(editingMovement.id, {
-        number: parseInt(movementForm.number),
+        position: parseInt(movementForm.position),
+        label: movementForm.label.trim() || null,
         title: movementForm.title.trim() || null,
       });
 
-      setSuccessMessage(`Updated movement ${movementForm.number}`);
+      setSuccessMessage(`Updated work part ${movementForm.position}`);
       setEditingMovement(null);
-      setMovementForm({ number: '', title: '' });
+      setMovementForm({ position: '', label: '', title: '' });
       if (selectedWork) {
         await handleViewWorkDetails(selectedWork.work.id);
       }
@@ -304,10 +307,11 @@ export function WorksTab() {
     });
   };
 
-  const startEditingMovement = (mvmt: MovementRow) => {
+  const startEditingMovement = (mvmt: AdminWorkPart) => {
     setEditingMovement(mvmt);
     setMovementForm({
-      number: mvmt.number.toString(),
+      position: mvmt.position.toString(),
+      label: mvmt.label || '',
       title: mvmt.title || '',
     });
   };
@@ -494,13 +498,13 @@ export function WorksTab() {
           <div className="mb-6">
             <div className="flex justify-between items-center mb-3">
               <h4 className="font-medium text-black dark:text-white">
-                Movements ({selectedWork.movements.length})
+                Work parts ({selectedWork.movements.length})
               </h4>
               <button
                 onClick={() => setAddingMovement(true)}
                 className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
               >
-                Add Movement
+                Add work part
               </button>
             </div>
 
@@ -509,10 +513,17 @@ export function WorksTab() {
                 <div className="flex gap-2 mb-2">
                   <input
                     type="number"
-                    value={newMovement.number}
-                    onChange={(e) => setNewMovement({ ...newMovement, number: e.target.value })}
-                    placeholder="#"
+                    value={newMovement.position}
+                    onChange={(e) => setNewMovement({ ...newMovement, position: e.target.value })}
+                    placeholder="Position"
                     className="w-16 px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
+                  />
+                  <input
+                    type="text"
+                    value={newMovement.label}
+                    onChange={(e) => setNewMovement({ ...newMovement, label: e.target.value })}
+                    placeholder="Label"
+                    className="w-24 px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"
                   />
                   <input
                     type="text"
@@ -526,7 +537,7 @@ export function WorksTab() {
                   <button
                     onClick={() => {
                       setAddingMovement(false);
-                      setNewMovement({ number: '', title: '' });
+                      setNewMovement({ position: '', label: '', title: '' });
                     }}
                     className="text-xs px-3 py-1 rounded border border-zinc-300 dark:border-zinc-600"
                   >
@@ -534,7 +545,7 @@ export function WorksTab() {
                   </button>
                   <button
                     onClick={handleAddMovement}
-                    disabled={saving || !newMovement.number}
+                    disabled={saving || !newMovement.position}
                     className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     {saving ? 'Saving...' : 'Add'}
@@ -544,7 +555,7 @@ export function WorksTab() {
             )}
 
             {selectedWork.movements.length === 0 ? (
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">No movements yet.</p>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No work parts yet.</p>
             ) : (
               <div className="space-y-2">
                 {selectedWork.movements.map((mvmt) => (
@@ -556,11 +567,20 @@ export function WorksTab() {
                       <div className="flex-1 flex gap-2 items-center">
                         <input
                           type="number"
-                          value={movementForm.number}
+                          value={movementForm.position}
                           onChange={(e) =>
-                            setMovementForm({ ...movementForm, number: e.target.value })
+                            setMovementForm({ ...movementForm, position: e.target.value })
                           }
                           className="w-16 px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900"
+                        />
+                        <input
+                          type="text"
+                          value={movementForm.label}
+                          onChange={(e) =>
+                            setMovementForm({ ...movementForm, label: e.target.value })
+                          }
+                          placeholder="Label"
+                          className="w-24 px-2 py-1 text-sm rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900"
                         />
                         <input
                           type="text"
@@ -574,7 +594,7 @@ export function WorksTab() {
                         <button
                           onClick={() => {
                             setEditingMovement(null);
-                            setMovementForm({ number: '', title: '' });
+                            setMovementForm({ position: '', label: '', title: '' });
                           }}
                           className="text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-600"
                         >
@@ -582,7 +602,7 @@ export function WorksTab() {
                         </button>
                         <button
                           onClick={handleUpdateMovement}
-                          disabled={saving || !movementForm.number}
+                          disabled={saving || !movementForm.position}
                           className="text-xs px-2 py-1 rounded bg-blue-600 text-white"
                         >
                           Save
@@ -592,7 +612,7 @@ export function WorksTab() {
                       <>
                         <div>
                           <span className="font-mono text-zinc-600 dark:text-zinc-400">
-                            {toRoman(mvmt.number)}.
+                            {mvmt.label || toRoman(mvmt.position)}.
                           </span>{' '}
                           <span className="text-black dark:text-white">
                             {mvmt.title || <span className="text-zinc-400">Untitled</span>}
@@ -757,9 +777,7 @@ export function WorksTab() {
                       ? `${work.catalogSystem} ${work.catalogNumber}`
                       : '-'}
                   </td>
-                  <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
-                    {work.form || '-'}
-                  </td>
+                  <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">{work.form || '-'}</td>
                   <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
                     {work.yearComposed ?? '-'}
                   </td>

@@ -13,6 +13,7 @@ import {
 import { useSpotifyPlayer } from '@/lib/spotify-player-context';
 import { useLikedSongs } from '@/lib/use-liked-songs';
 import { MovementRow } from './MovementRow';
+import { formatWorkPart } from '@/lib/classical-normalization';
 
 interface LikedSongsProps {
   accessToken: string;
@@ -140,48 +141,38 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
     return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
   });
 
-  // Convert number to roman numeral
-  const toRoman = (num: number): string => {
-    const romanNumerals: [number, string][] = [
-      [10, 'X'],
-      [9, 'IX'],
-      [5, 'V'],
-      [4, 'IV'],
-      [1, 'I'],
-    ];
-    let result = '';
-    for (const [value, symbol] of romanNumerals) {
-      while (num >= value) {
-        result += symbol;
-        num -= value;
-      }
-    }
-    return result;
-  };
-
-  // Create maps of trackId -> work info, movement number, and movement name
+  // Create maps of trackId -> work, recording, part position, and display name.
   const trackWorkMap = new Map(matchedTracks.map((m) => [m.trackId, m.work]));
-  const trackMovementMap = new Map(matchedTracks.map((m) => [m.trackId, m.movementNumber]));
-  const trackMovementNameMap = new Map(
+  const trackRecordingMap = new Map(matchedTracks.map((m) => [m.trackId, m.recordingId]));
+  const trackPartPositionMap = new Map(
+    matchedTracks.map((m) => [m.trackId, m.parts[0]?.position ?? 0]),
+  );
+  const trackPartNameMap = new Map(
     matchedTracks.map((m) => [
       m.trackId,
-      m.movementName
-        ? `${toRoman(m.movementNumber)}. ${m.movementName}`
-        : `${toRoman(m.movementNumber)}.`,
+      m.parts
+        .map((part) => formatWorkPart(part.label, part.title))
+        .filter(Boolean)
+        .join(' / '),
     ]),
   );
   const matchedTrackIds = new Set(matchedTracks.map((m) => m.trackId));
 
-  // Group matched tracks by work
-  const matchedByWork = new Map<number, { work: MatchedTrack['work']; tracks: SavedTrack[] }>();
+  // A work can have several recordings on one album, so recording identity is part of the key.
+  const matchedByWork = new Map<
+    string,
+    { work: MatchedTrack['work']; recordingId: number; tracks: SavedTrack[] }
+  >();
   for (const likedTrack of sortedTracks) {
     const work = trackWorkMap.get(likedTrack.track.id);
-    if (work) {
-      const existing = matchedByWork.get(work.id);
+    const recordingId = trackRecordingMap.get(likedTrack.track.id);
+    if (work && recordingId !== undefined) {
+      const key = `${work.id}:${recordingId}`;
+      const existing = matchedByWork.get(key);
       if (existing) {
         existing.tracks.push(likedTrack);
       } else {
-        matchedByWork.set(work.id, { work, tracks: [likedTrack] });
+        matchedByWork.set(key, { work, recordingId, tracks: [likedTrack] });
       }
     }
   }
@@ -235,8 +226,8 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
   // Add matched tracks by work (sorted by movement number within each work)
   for (const { work, tracks: workTracks } of matchedByWork.values()) {
     const sortedWorkTracks = [...workTracks].sort((a, b) => {
-      const movA = trackMovementMap.get(a.track.id) ?? 0;
-      const movB = trackMovementMap.get(b.track.id) ?? 0;
+      const movA = trackPartPositionMap.get(a.track.id) ?? 0;
+      const movB = trackPartPositionMap.get(b.track.id) ?? 0;
       return movA - movB;
     });
     for (const savedTrack of sortedWorkTracks) {
@@ -283,7 +274,7 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
           </span>
         </div>
         <div className="divide-y divide-zinc-200 dark:divide-zinc-700 md:divide-y-0 md:grid md:grid-cols-[minmax(0,_1fr)_max-content] md:border md:border-zinc-200 md:dark:border-zinc-700">
-          {Array.from(matchedByWork.values()).map(({ work, tracks: workTracks }) => {
+          {Array.from(matchedByWork.values()).map(({ work, recordingId, tracks: workTracks }) => {
             const firstTrack = workTracks[0].track;
             const headerArtists = Array.from(
               new Set(
@@ -295,8 +286,8 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
 
             // Sort tracks by movement number for playback
             const sortedWorkTracks = [...workTracks].sort((a, b) => {
-              const movA = trackMovementMap.get(a.track.id) ?? 0;
-              const movB = trackMovementMap.get(b.track.id) ?? 0;
+              const movA = trackPartPositionMap.get(a.track.id) ?? 0;
+              const movB = trackPartPositionMap.get(b.track.id) ?? 0;
               return movA - movB;
             });
 
@@ -313,7 +304,7 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
                 : sortedWorkTracks.map(({ track }) => track.uri);
 
             return (
-              <div key={work.id} className="contents">
+              <div key={`${work.id}:${recordingId}`} className="contents">
                 <button
                   onClick={() => play(workAndSubsequentUris)}
                   className="px-2 py-2 flex items-center gap-3 border-b border-zinc-200 dark:border-zinc-700 md:border-b md:border-r md:pr-10 text-left cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
@@ -355,8 +346,8 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
                 <div className="divide-y divide-zinc-200 dark:divide-zinc-700 border-b border-zinc-200 dark:border-zinc-700 md:border-b md:border-l">
                   {[...workTracks]
                     .sort((a, b) => {
-                      const movA = trackMovementMap.get(a.track.id) ?? 0;
-                      const movB = trackMovementMap.get(b.track.id) ?? 0;
+                      const movA = trackPartPositionMap.get(a.track.id) ?? 0;
+                      const movB = trackPartPositionMap.get(b.track.id) ?? 0;
                       return movA - movB;
                     })
                     .map(({ track }) => {
@@ -373,7 +364,7 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
                         <MovementRow
                           key={track.id}
                           track={track}
-                          displayName={trackMovementNameMap.get(track.id) ?? undefined}
+                          displayName={trackPartNameMap.get(track.id) || undefined}
                           hideComposer={work.composerName}
                           hideArtwork
                           isPlaying={currentTrack?.id === track.id}
