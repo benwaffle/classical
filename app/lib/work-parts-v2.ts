@@ -45,31 +45,6 @@ async function getComposerRows() {
   return [];
 }
 
-export async function seedWorkCatalogV2() {
-  const works = await db.select().from(work);
-  const rows = works.flatMap((item) =>
-    item.catalogSystem && item.catalogNumber
-      ? [
-          {
-            workId: item.id,
-            system: item.catalogSystem,
-            number: item.catalogNumber,
-            normalizedSystem: normalizeCatalogSystem(item.catalogSystem),
-            normalizedNumber: normalizeCatalogNumber(item.catalogNumber),
-            isPrimary: true,
-          },
-        ]
-      : [],
-  );
-  for (let index = 0; index < rows.length; index += 200) {
-    await db
-      .insert(workCatalogV2)
-      .values(rows.slice(index, index + 200))
-      .onConflictDoNothing();
-  }
-  return rows.length;
-}
-
 export async function ensureWorkCatalogV2(
   workId: number,
   system: string | null,
