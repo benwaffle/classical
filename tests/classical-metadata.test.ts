@@ -2,12 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   formatWorkPart,
-  cleanWorkPartLabel,
-  cleanWorkPartTitle,
   normalizeCatalogNumber,
   normalizeCatalogSystem,
-  normalizeWorkPartFields,
-  splitPartLabel,
   toRoman,
 } from '../app/lib/classical-normalization';
 import {
@@ -20,42 +16,10 @@ test('normalizes catalog punctuation without changing display data', () => {
   assert.equal(normalizeCatalogNumber('6 No. 4'), normalizeCatalogNumber('6 No.4'));
 });
 
-test('extracts labels and renders them exactly once', () => {
-  const part = splitPartLabel(4, 'IV. Offertorium: 2. Hostias');
-  assert.deepEqual(part, { label: 'IV', title: 'Offertorium: 2. Hostias' });
-  assert.equal(formatWorkPart(part.label, part.title), 'IV. Offertorium: 2. Hostias');
-  assert.deepEqual(splitPartLabel(3, 'Lacrimosa'), { label: 'III', title: 'Lacrimosa' });
+test('renders stored labels and titles exactly once', () => {
+  assert.equal(formatWorkPart('IV.2', 'Hostias'), 'IV.2. Hostias');
+  assert.equal(formatWorkPart(null, 'Finale. Allegro brillante'), 'Finale. Allegro brillante');
   assert.equal(toRoman(24), 'XXIV');
-  assert.equal(cleanWorkPartLabel('VIII. Communio', 'Communio'), 'VIII');
-  assert.equal(cleanWorkPartLabel('III.', 'Dies irae'), 'III');
-  assert.equal(cleanWorkPartLabel('III. Menuetto', 'Allegro molto e vivace'), 'III');
-  assert.equal(cleanWorkPartLabel('III.1', 'Dies irae'), 'III.1');
-  assert.deepEqual(normalizeWorkPartFields('I. Allegro', null), {
-    label: 'I',
-    title: 'Allegro',
-  });
-  assert.deepEqual(normalizeWorkPartFields('III. Menuetto', 'Allegro molto'), {
-    label: 'III',
-    title: 'Menuetto: Allegro molto',
-  });
-  assert.deepEqual(normalizeWorkPartFields('III.1', 'Dies irae'), {
-    label: 'III.1',
-    title: 'Dies irae',
-  });
-  assert.deepEqual(normalizeWorkPartFields('4. Largo e spiccato', null), {
-    label: '4',
-    title: 'Largo e spiccato',
-  });
-  assert.deepEqual(normalizeWorkPartFields('Finale. Allegro brillante', null), {
-    label: null,
-    title: 'Finale. Allegro brillante',
-  });
-  assert.deepEqual(normalizeWorkPartFields('Variation 18 (Andante cantabile)', null), {
-    label: 'Variation 18',
-    title: 'Andante cantabile',
-  });
-  assert.equal(cleanWorkPartTitle('Fuga', 'Fuga. Allegro, ma non troppo'), 'Allegro, ma non troppo');
-  assert.equal(cleanWorkPartTitle('I', 'Introitus'), 'Introitus');
 });
 
 test('matches recordings by exact membership before overlap', () => {

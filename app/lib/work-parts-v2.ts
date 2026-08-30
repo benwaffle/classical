@@ -11,9 +11,6 @@ import {
   metadataMigrationAudit,
 } from '@/lib/db/schema';
 import {
-  cleanWorkPartLabel,
-  cleanWorkPartTitle,
-  normalizeWorkPartFields,
   normalizeCatalogNumber,
   normalizeCatalogSystem,
   normalizeMetadataText,
@@ -151,9 +148,11 @@ export async function resolveWorkV2(metadata: ClassicalMetadataV2) {
 }
 
 async function resolveWorkPart(workId: number, candidate: ClassicalMetadataV2['parts'][number]) {
-  const fields = normalizeWorkPartFields(candidate.label, candidate.title);
-  const label = cleanWorkPartLabel(fields.label, fields.title);
-  candidate = { ...candidate, label, title: cleanWorkPartTitle(label, fields.title) };
+  candidate = {
+    ...candidate,
+    label: candidate.label?.trim() || null,
+    title: candidate.title?.trim() || null,
+  };
   const existing = await db.select().from(workPartV2).where(eq(workPartV2.workId, workId));
   const normalizedTitle = normalizeMetadataText(candidate.title);
   const normalizedLabel = normalizeMetadataText(candidate.label);

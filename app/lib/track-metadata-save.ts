@@ -12,7 +12,7 @@ import {
 } from '@/lib/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
 import { upsertWork } from '@/app/admin/actions/spotify-utils';
-import { splitPartLabel } from '@/lib/classical-normalization';
+import { toRoman } from '@/lib/classical-normalization';
 import { ensureWorkCatalogV2 } from '@/lib/work-parts-v2';
 
 export interface TrackMetadataSaveInput {
@@ -169,7 +169,6 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
   });
 
   await ensureWorkCatalogV2(workId, metadata.catalogSystem, metadata.catalogNumber);
-  const split = splitPartLabel(metadata.movementNumber, metadata.movementName);
   let [part] = await db
     .select({ id: workPartV2.id })
     .from(workPartV2)
@@ -186,8 +185,8 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
       .values({
         workId,
         position: metadata.movementNumber,
-        label: split.label,
-        title: split.title,
+        label: toRoman(metadata.movementNumber),
+        title: metadata.movementName?.trim() || null,
       })
       .returning({ id: workPartV2.id });
   }

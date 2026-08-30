@@ -49,8 +49,15 @@ const workPartSchema = z.object({
   label: z
     .string()
     .nullable()
-    .describe("Printed structural label such as 'III.2', 'Act I', or 'Var. 4', without the title"),
-  title: z.string().nullable().describe("Clean leaf title such as 'Tuba mirum', without its label"),
+    .describe(
+      "Printed identifier/numbering only, such as 'III', 'III.2', '4', 'Act I', 'No. 4', or 'Variation 18'. Never include a tempo, movement name, form, role, key, or other descriptive words. Null when the source has no identifier.",
+    ),
+  title: z
+    .string()
+    .nullable()
+    .describe(
+      "The complete descriptive leaf title without its identifier, including movement/form words and tempo text, such as 'Menuetto. Allegro molto', 'Tuba mirum', or 'Finale. Allegro brillante'. Null only when no descriptive title is available.",
+    ),
 });
 
 const classicalMetadataV2Schema = z.object({
@@ -91,6 +98,28 @@ type TrackInput = { trackName: string; artistNames: string[] };
 const MAX_TRACKS_PER_PARSE = 20;
 const RATE_LIMIT_BACKOFF_MS = [15_000, 30_000, 60_000, 60_000];
 const PARSER_MODEL = process.env.CLASSICAL_PARSER_MODEL ?? 'openai/gpt-5-mini';
+
+const WORK_PART_PARSING_RULES = `A work part is a canonical leaf unit. A Spotify track may contain one leaf, several leaves, or part of one leaf.
+
+For every part, separate its printed identifier from all descriptive text:
+- label contains identifier/numbering only: Roman or Arabic numbering, hierarchical numbering, act/scene/no./variation identifiers, etc.
+- title contains all descriptive text: movement/form names, liturgical text, dramatic role, tempo, key, and qualifiers.
+- Never put words such as Allegro, Adagio, Menuetto, Scherzo, Finale, Prelude, Aria, Chorus, or a key name in label.
+- Never copy label into title.
+- If there is descriptive text but no printed identifier, label is null.
+
+Required examples:
+- "III. Menuetto. Allegro molto e vivace" => label "III"; title "Menuetto. Allegro molto e vivace"
+- "III.2. Tuba mirum" => label "III.2"; title "Tuba mirum"
+- "4. Largo e spiccato" => label "4"; title "Largo e spiccato"
+- "Variation 18 (Andante cantabile)" => label "Variation 18"; title "Andante cantabile"
+- "Finale. Allegro brillante" => label null; title "Finale. Allegro brillante"
+- "Act I: No. 2. Aria: Adagio" as one leaf => label "Act I: No. 2"; title "Aria: Adagio"
+- A track containing "I. Allegro / II. Adagio" => two part objects, not one combined label or title.
+
+"III. Sequentia: 2. Tuba mirum" is its own leaf, distinct from other Sequentia leaves. Preserve its complete structural identifier as label "III.2", not "IV". Hostias is label "IV.2", not "X".
+
+position is the 1-based flattened leaf order across the complete work, not the numeric value of a printed Roman section. In Mozart's Requiem, VIII. Communio follows the six Sequentia leaves and two Offertorium leaves, so it is position 14, not position 8.`;
 
 function isRateLimitError(error: unknown) {
   const message =
@@ -241,7 +270,7 @@ export async function parseAlbumTracksV2(
       try {
         const result = await generateText({
           model: PARSER_MODEL,
-          prompt: `Parse the requested tracks from the album "${albumName}". The complete album outline is provided so recording groups stay stable across batches:\n\n${albumOutline}\n\nReturn objects only for these requested inputs:\n${trackList}\n\nA work part is a canonical leaf unit, so "III. Sequentia: 2. Tuba mirum" is its own part, distinct from the other Sequentia parts. A Spotify track may contain several parts. Keep labels out of titles. Preserve the complete printed structural label in label whenever present: Tuba mirum is label "III.2", not "IV"; Hostias is "IV.2", not "X". Position is the 1-based FLATTENED LEAF ORDER across the complete work, not the numeric value of a printed Roman section label: in Mozart's Requiem, VIII. Communio follows the six Sequentia leaves and two Offertorium leaves, so it is position 14, not position 8. Use exactly the same descriptive recordingGroup text anywhere the same performance appears in the album, including across requested batches; base it on work and performers rather than the batch number. Separate performances of the same work require different groups. For a primary composer with a completion or arrangement credit, put only the primary composer in composerName. Copy inputIndex exactly.`,
+          prompt: `Parse the requested tracks from the album "${albumName}". The complete album outline is provided so recording groups stay stable across batches:\n\n${albumOutline}\n\nReturn objects only for these requested inputs:\n${trackList}\n\n${WORK_PART_PARSING_RULES}\n\nUse exactly the same descriptive recordingGroup text anywhere the same performance appears in the album, including across requested batches; base it on work and performers rather than the batch number. Separate performances of the same work require different groups. For a primary composer with a completion or arrangement credit, put only the primary composer in composerName. Copy inputIndex exactly.`,
           output: Output.object({ schema: albumBatchV2Schema }),
         });
         output = result.output;
