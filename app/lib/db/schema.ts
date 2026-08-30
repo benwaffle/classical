@@ -286,12 +286,10 @@ export const recordingTrackV2 = sqliteTable(
     spotifyTrackId: text('spotify_track_id')
       .notNull()
       .references(() => spotifyTrack.spotifyId),
-    position: integer('position').notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.recordingId, table.spotifyTrackId] }),
     uniqueIndex('recording_track_v2_track_idx').on(table.spotifyTrackId),
-    uniqueIndex('recording_track_v2_position_idx').on(table.recordingId, table.position),
   ],
 );
 

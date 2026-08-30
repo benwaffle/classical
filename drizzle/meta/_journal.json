@@ -15,6 +15,13 @@
       "when": 1788059889782,
       "tag": "0001_woozy_sasquatch",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788112889715,
+      "tag": "0002_numerous_triathlon",
+      "breakpoints": true
     }
   ]
 }

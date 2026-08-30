@@ -10,7 +10,7 @@ import {
   trackWorkPartV2,
   workPartV2,
 } from '@/lib/db/schema';
-import { and, eq, max, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { upsertWork } from '@/app/admin/actions/spotify-utils';
 import { splitPartLabel } from '@/lib/classical-normalization';
 import { ensureWorkCatalogV2 } from '@/lib/work-parts-v2';
@@ -204,16 +204,11 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
       .values({ spotifyAlbumId: album.id, workId, popularity: null })
       .returning({ id: recordingV2.id });
   }
-  const [{ maximum }] = await db
-    .select({ maximum: max(recordingTrackV2.position) })
-    .from(recordingTrackV2)
-    .where(eq(recordingTrackV2.recordingId, recordingRow.id));
   await db
     .insert(recordingTrackV2)
     .values({
       recordingId: recordingRow.id,
       spotifyTrackId: track.id,
-      position: (maximum ?? 0) + 1,
     })
     .onConflictDoNothing();
   await db.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, track.id));

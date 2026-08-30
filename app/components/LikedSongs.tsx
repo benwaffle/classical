@@ -144,9 +144,14 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
   // Create maps of trackId -> work, recording, recording order, and display name.
   const trackWorkMap = new Map(matchedTracks.map((m) => [m.trackId, m.work]));
   const trackRecordingMap = new Map(matchedTracks.map((m) => [m.trackId, m.recordingId]));
-  const trackRecordingPositionMap = new Map(
-    matchedTracks.map((m) => [m.trackId, m.recordingPosition]),
+  const trackRecordingOrderMap = new Map(
+    matchedTracks.map((m) => [m.trackId, [m.discNumber, m.trackNumber] as const]),
   );
+  const compareRecordingOrder = (a: SavedTrack, b: SavedTrack) => {
+    const [discA, trackA] = trackRecordingOrderMap.get(a.track.id) ?? [0, 0];
+    const [discB, trackB] = trackRecordingOrderMap.get(b.track.id) ?? [0, 0];
+    return discA - discB || trackA - trackB || a.track.id.localeCompare(b.track.id);
+  };
   const trackPartNameMap = new Map(
     matchedTracks.map((m) => [
       m.trackId,
@@ -225,11 +230,7 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
 
   // Add matched tracks by work in their recording-specific order.
   for (const { work, tracks: workTracks } of matchedByWork.values()) {
-    const sortedWorkTracks = [...workTracks].sort((a, b) => {
-      const positionA = trackRecordingPositionMap.get(a.track.id) ?? 0;
-      const positionB = trackRecordingPositionMap.get(b.track.id) ?? 0;
-      return positionA - positionB;
-    });
+    const sortedWorkTracks = [...workTracks].sort(compareRecordingOrder);
     for (const savedTrack of sortedWorkTracks) {
       allTracksInOrder.push({ track: savedTrack.track, workId: work.id });
     }
@@ -285,11 +286,7 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
             );
 
             // A recording's persisted order is derived from Spotify disc/track order.
-            const sortedWorkTracks = [...workTracks].sort((a, b) => {
-              const positionA = trackRecordingPositionMap.get(a.track.id) ?? 0;
-              const positionB = trackRecordingPositionMap.get(b.track.id) ?? 0;
-              return positionA - positionB;
-            });
+            const sortedWorkTracks = [...workTracks].sort(compareRecordingOrder);
 
             // When clicking work header, queue this work's tracks + up to 50 subsequent tracks
             const firstTrackInWork = sortedWorkTracks[0]?.track;
@@ -345,11 +342,7 @@ export function LikedSongs({ accessToken }: LikedSongsProps) {
                 </button>
                 <div className="divide-y divide-zinc-200 dark:divide-zinc-700 border-b border-zinc-200 dark:border-zinc-700 md:border-b md:border-l">
                   {[...workTracks]
-                    .sort((a, b) => {
-                      const positionA = trackRecordingPositionMap.get(a.track.id) ?? 0;
-                      const positionB = trackRecordingPositionMap.get(b.track.id) ?? 0;
-                      return positionA - positionB;
-                    })
+                    .sort(compareRecordingOrder)
                     .map(({ track }) => {
                       // Find this track's position in the global list and queue up to 50 tracks after it
                       const trackIndex = allTracksInOrder.findIndex((t) => t.track.id === track.id);

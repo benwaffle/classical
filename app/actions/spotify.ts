@@ -9,6 +9,7 @@ import {
   spotifyArtist,
   recordingV2,
   recordingTrackV2,
+  spotifyTrack,
   workPartV2,
   workCatalogV2,
   trackWorkPartV2,
@@ -44,7 +45,8 @@ export async function getSpotifyToken(): Promise<string> {
 export interface MatchedTrack {
   trackId: string;
   recordingId: number;
-  recordingPosition: number;
+  discNumber: number;
+  trackNumber: number;
   parts: Array<{
     id: number;
     position: number;
@@ -69,7 +71,8 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
       .select({
         trackId: recordingTrackV2.spotifyTrackId,
         recordingId: recordingV2.id,
-        recordingPosition: recordingTrackV2.position,
+        discNumber: spotifyTrack.discNumber,
+        trackNumber: spotifyTrack.trackNumber,
         partId: workPartV2.id,
         partPosition: workPartV2.position,
         partLabel: workPartV2.label,
@@ -83,6 +86,7 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
         composerName: composer.name,
       })
       .from(recordingTrackV2)
+      .innerJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
       .innerJoin(recordingV2, eq(recordingTrackV2.recordingId, recordingV2.id))
       .innerJoin(work, eq(recordingV2.workId, work.id))
       .innerJoin(composer, eq(work.composerId, composer.id))
@@ -112,7 +116,8 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
         byTrack.set(row.trackId, {
           trackId: row.trackId,
           recordingId: row.recordingId,
-          recordingPosition: row.recordingPosition,
+          discNumber: row.discNumber,
+          trackNumber: row.trackNumber,
           parts: [part],
           work: {
             id: row.workId,

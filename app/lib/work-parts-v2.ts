@@ -242,10 +242,9 @@ async function reconcileRecording(spotifyAlbumId: string, workId: number, trackI
   if (trackIds.length > 0) {
     await db.delete(recordingTrackV2).where(inArray(recordingTrackV2.spotifyTrackId, trackIds));
     await db.insert(recordingTrackV2).values(
-      trackIds.map((spotifyTrackId, position) => ({
+      trackIds.map((spotifyTrackId) => ({
         recordingId: recordingId!,
         spotifyTrackId,
-        position: position + 1,
       })),
     );
   }
