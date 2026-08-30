@@ -22,43 +22,60 @@ export function useLikedSongs(accessToken: string): UseLikedSongsResult {
   const [total, setTotal] = useState(0);
   const hasFetched = useRef(false);
 
-  const fetchFromApi = useCallback(async () => {
-    const spotify = createSpotifySdk(accessToken, spotifyClientId);
-    const limit = 50 as MaxInt<50>;
-    const allTracks: SavedTrack[] = [];
-    let offset = 0;
-    let hasNext = true;
+  const fetchFromApi = useCallback(
+    async (showProgress = true) => {
+      const spotify = createSpotifySdk(accessToken, spotifyClientId);
+      const limit = 50 as MaxInt<50>;
+      const allTracks: SavedTrack[] = [];
+      let offset = 0;
+      let hasNext = true;
+      let apiTotal = 0;
 
-    while (hasNext) {
-      const page = await spotify.currentUser.tracks.savedTracks(limit, offset);
-      allTracks.push(...page.items);
-      setTracks([...allTracks]);
-      setTotal(page.total);
-      hasNext = Boolean(page.next);
-      offset += page.items.length;
-      if (page.items.length === 0) break;
-    }
+      while (hasNext) {
+        const page = await spotify.currentUser.tracks.savedTracks(limit, offset);
+        allTracks.push(...page.items);
+        apiTotal = page.total;
+        if (showProgress) {
+          setTracks([...allTracks]);
+          setTotal(page.total);
+        }
+        hasNext = Boolean(page.next);
+        offset += page.items.length;
+        if (page.items.length === 0) break;
+      }
 
-    await setCachedLikedSongs(allTracks);
-    return allTracks;
-  }, [accessToken]);
+      setTracks(allTracks);
+      setTotal(apiTotal);
+      await setCachedLikedSongs(allTracks);
+      return allTracks;
+    },
+    [accessToken],
+  );
 
   const fetch = useCallback(async () => {
     setLoading(true);
     setError(null);
+    let hasCachedTracks = false;
 
     try {
       const cached = await getCachedLikedSongs();
-      if (cached && cached.length > 0) {
-        setTracks(cached);
-        setTotal(cached.length);
-        setLoading(false);
-        return;
+      if (cached) {
+        hasCachedTracks = cached.tracks.length > 0;
+        setTracks(cached.tracks);
+        setTotal(cached.tracks.length);
+
+        if (!cached.isStale) return;
       }
 
-      await fetchFromApi();
+      await fetchFromApi(!hasCachedTracks);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      // An expired cache is still useful. Keep showing it if a background
+      // refresh fails instead of replacing the library with an error screen.
+      if (hasCachedTracks) {
+        console.error('Failed to refresh liked songs:', err);
+      } else {
+        setError(err instanceof Error ? err.message : 'An error occurred');
+      }
     } finally {
       setLoading(false);
     }

@@ -6,6 +6,11 @@ const STORE_NAME = 'likedSongs';
 const META_STORE = 'metadata';
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
+export interface CachedLikedSongs {
+  tracks: SavedTrack[];
+  isStale: boolean;
+}
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -26,7 +31,7 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-export async function getCachedLikedSongs(): Promise<SavedTrack[] | null> {
+export async function getCachedLikedSongs(): Promise<CachedLikedSongs | null> {
   try {
     const db = await openDB();
 
@@ -39,7 +44,7 @@ export async function getCachedLikedSongs(): Promise<SavedTrack[] | null> {
       metaRequest.onerror = () => resolve(null);
     });
 
-    if (!metadata || Date.now() - metadata.timestamp >= CACHE_TTL) {
+    if (!metadata) {
       return null;
     }
 
@@ -47,10 +52,17 @@ export async function getCachedLikedSongs(): Promise<SavedTrack[] | null> {
     const store = tx.objectStore(STORE_NAME);
     const request = store.getAll();
 
-    return new Promise((resolve) => {
+    const tracks = await new Promise<SavedTrack[] | null>((resolve) => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => resolve(null);
     });
+
+    if (!tracks) return null;
+
+    return {
+      tracks,
+      isStale: Date.now() - metadata.timestamp >= CACHE_TTL,
+    };
   } catch {
     return null;
   }
