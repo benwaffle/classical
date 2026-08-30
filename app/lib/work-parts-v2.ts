@@ -177,16 +177,23 @@ async function resolveWorkPart(workId: number, candidate: ClassicalMetadataV2['p
   if (titleMatches.length === 1) return preserveCanonicalPosition(titleMatches[0]);
 
   const occupant = existing.find((part) => part.position === candidate.position);
+  const occupantHasMatchingLabel =
+    occupant &&
+    normalizedLabel &&
+    normalizeMetadataText(occupant.label) === normalizedLabel;
   if (
     occupant &&
-    (!normalizedTitle ||
+    (occupantHasMatchingLabel ||
+      !normalizedTitle ||
       !normalizeMetadataText(occupant.title) ||
       normalizeMetadataText(occupant.title) === normalizedTitle)
   ) {
-    await db
-      .update(workPartV2)
-      .set({ label: candidate.label, title: candidate.title })
-      .where(eq(workPartV2.id, occupant.id));
+    if (!occupantHasMatchingLabel) {
+      await db
+        .update(workPartV2)
+        .set({ label: candidate.label, title: candidate.title })
+        .where(eq(workPartV2.id, occupant.id));
+    }
     return { id: occupant.id, status: 'confirmed' as const };
   }
 

@@ -44,6 +44,7 @@ export async function getSpotifyToken(): Promise<string> {
 export interface MatchedTrack {
   trackId: string;
   recordingId: number;
+  recordingPosition: number;
   parts: Array<{
     id: number;
     position: number;
@@ -68,6 +69,7 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
       .select({
         trackId: recordingTrackV2.spotifyTrackId,
         recordingId: recordingV2.id,
+        recordingPosition: recordingTrackV2.position,
         partId: workPartV2.id,
         partPosition: workPartV2.position,
         partLabel: workPartV2.label,
@@ -110,6 +112,7 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
         byTrack.set(row.trackId, {
           trackId: row.trackId,
           recordingId: row.recordingId,
+          recordingPosition: row.recordingPosition,
           parts: [part],
           work: {
             id: row.workId,

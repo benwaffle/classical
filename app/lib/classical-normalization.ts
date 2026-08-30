@@ -65,7 +65,9 @@ export function formatWorkPart(label: string | null, title: string | null) {
 
 export function cleanWorkPartLabel(label: string | null, title: string | null) {
   if (!label) return label;
-  const trimmedLabel = label.replace(/[\s.:;]+$/gu, '').trim();
+  let trimmedLabel = label.replace(/[\s.:;]+$/gu, '').trim();
+  const descriptiveRomanLabel = trimmedLabel.match(/^([IVXLCDM]+)[\s.:;-]+([^\d].*)$/iu);
+  if (descriptiveRomanLabel) trimmedLabel = descriptiveRomanLabel[1];
   if (!title) return trimmedLabel || null;
   const normalizedLabel = normalizeMetadataText(trimmedLabel);
   const normalizedTitle = normalizeMetadataText(title);

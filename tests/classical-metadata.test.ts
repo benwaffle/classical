@@ -27,6 +27,8 @@ test('extracts labels and renders them exactly once', () => {
   assert.equal(toRoman(24), 'XXIV');
   assert.equal(cleanWorkPartLabel('VIII. Communio', 'Communio'), 'VIII');
   assert.equal(cleanWorkPartLabel('III.', 'Dies irae'), 'III');
+  assert.equal(cleanWorkPartLabel('III. Menuetto', 'Allegro molto e vivace'), 'III');
+  assert.equal(cleanWorkPartLabel('III.1', 'Dies irae'), 'III.1');
   assert.equal(cleanWorkPartTitle('Fuga', 'Fuga. Allegro, ma non troppo'), 'Allegro, ma non troppo');
   assert.equal(cleanWorkPartTitle('I', 'Introitus'), 'Introitus');
 });
