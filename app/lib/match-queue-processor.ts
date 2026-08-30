@@ -134,9 +134,6 @@ async function enqueueAlbumTracks(albumId: string, submittedBy: string) {
 
   const existingById = new Map(existingRows.map((row) => [row.spotifyId, row]));
   const newTrackIds = albumTrackIds.filter((trackId) => !existingById.has(trackId));
-  const retryTrackIds = existingRows
-    .filter((row) => row.status === 'not_classical')
-    .map((row) => row.spotifyId);
   const missingAlbumIds = existingRows
     .filter((row) => row.spotifyAlbumId !== album.id)
     .map((row) => row.spotifyId);
@@ -152,18 +149,6 @@ async function enqueueAlbumTracks(albumId: string, submittedBy: string) {
     );
   }
 
-  if (retryTrackIds.length > 0) {
-    await db
-      .update(matchQueue)
-      .set({
-        spotifyAlbumId: album.id,
-        status: 'pending',
-        processedAt: null,
-        errorMessage: null,
-      })
-      .where(inArray(matchQueue.spotifyId, retryTrackIds));
-  }
-
   if (missingAlbumIds.length > 0) {
     await db
       .update(matchQueue)
@@ -174,8 +159,8 @@ async function enqueueAlbumTracks(albumId: string, submittedBy: string) {
   return {
     albumId,
     trackIds: albumTrackIds,
-    submitted: newTrackIds.length + retryTrackIds.length,
-    alreadyQueued: albumTrackIds.length - newTrackIds.length - retryTrackIds.length,
+    submitted: newTrackIds.length,
+    alreadyQueued: albumTrackIds.length - newTrackIds.length,
   };
 }
 
