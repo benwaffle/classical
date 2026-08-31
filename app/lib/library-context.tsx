@@ -33,7 +33,10 @@ interface LibraryContextValue {
   works: LibraryWork[];
   unmatched: UnmatchedTrack[];
   likedTrackIds: Set<string>;
+  /** No library to show yet. A stale cache counts as a library. */
   loading: boolean;
+  /** Spotify is being re-read behind a library we're already showing. */
+  refreshing: boolean;
   matching: boolean;
   error: string | null;
   totalSaved: number;
@@ -58,7 +61,7 @@ export function LibraryProvider({
   accessToken: string;
   children: ReactNode;
 }) {
-  const { tracks, loading, error, total } = useLikedSongs(accessToken);
+  const { tracks, loading, refreshing, error, total } = useLikedSongs(accessToken);
   const [works, setWorks] = useState<LibraryWork[]>([]);
   const [extra, setExtra] = useState<LibraryWork[]>([]);
   // Optimistic overrides so a heart responds before Spotify confirms.
@@ -85,7 +88,10 @@ export function LibraryProvider({
     return next;
   }, [savedIds, pendingLikes]);
 
-  // Resolve saved tracks into works once the full library has loaded.
+  /* Resolve saved tracks into works as soon as we hold a whole library —
+     a stale cache included, so an hour-old page still shows its works while
+     Spotify is re-read. Gated on `loading` only to avoid firing once per page
+     of a first, progressive load. */
   useEffect(() => {
     if (loading || signature === '' || requestedFor.current === signature) return;
     requestedFor.current = signature;
@@ -233,6 +239,7 @@ export function LibraryProvider({
     unmatched,
     likedTrackIds,
     loading,
+    refreshing,
     matching,
     error,
     totalSaved: total,

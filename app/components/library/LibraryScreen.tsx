@@ -20,7 +20,7 @@ const SORTS: [Sort, string][] = [
 
 /** The library: every work you hold at least one liked movement of. */
 export function LibraryScreen() {
-  const { works, unmatched, loading, matching, error, toggleLike } = useLibrary();
+  const { works, unmatched, loading, refreshing, matching, error, toggleLike } = useLibrary();
   const { currentTrack, play } = useSpotifyPlayer();
   const { query, setQuery } = useNavSearch();
   const [sort, setSort] = useState<Sort>('added');
@@ -104,7 +104,7 @@ export function LibraryScreen() {
        gradient bleed, but doesn't become a scroll container and so leaves the
        sticky group headings below free to stick to the viewport. */
     <main className="relative z-[1] mx-auto max-w-[1280px] overflow-x-clip px-6 pb-[180px] max-[900px]:px-4 max-[900px]:pb-[132px]">
-      <Masthead works={likedWorks} loading={loading || matching} />
+      <Masthead works={likedWorks} loading={loading || matching} refreshing={refreshing} />
 
       <Toolbar
         sort={sort}
@@ -179,7 +179,15 @@ function slug(key: string): string {
 }
 
 /** A quieter masthead than a cover page — this is the daily view. */
-function Masthead({ works, loading }: { works: LibraryWork[]; loading: boolean }) {
+function Masthead({
+  works,
+  loading,
+  refreshing,
+}: {
+  works: LibraryWork[];
+  loading: boolean;
+  refreshing: boolean;
+}) {
   const likedCount = works.reduce((a, w) => a + w.movements.filter((m) => m.liked).length, 0);
   const totalMs = works.reduce(
     (a, w) => a + w.movements.reduce((b, m) => b + (m.liked ? (m.durationMs ?? 0) : 0), 0),
@@ -210,6 +218,14 @@ function Masthead({ works, loading }: { works: LibraryWork[]; loading: boolean }
             <b className="onum font-semibold whitespace-nowrap text-ink not-italic">
               {hours}h {minutes}m
             </b>
+            {/* The counts above are last hour's until the refresh lands; say so
+                rather than presenting a stale library as current. */}
+            {refreshing && (
+              <>
+                <span className="text-rule">·</span>
+                <span className="whitespace-nowrap">re-reading Spotify…</span>
+              </>
+            )}
           </>
         )}
       </div>
