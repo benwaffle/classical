@@ -40,3 +40,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 package-lock.json
+
+# claude code — launch.json is shared, the rest is per-machine
+.claude/*
+!.claude/launch.json
