@@ -51,8 +51,11 @@ export function formatWorkPart(label: string | null, title: string | null) {
 }
 
 function romanToInteger(value: string): number | null {
-  if (!/^[ivxlcdm]+$/i.test(value)) return null;
-  const values: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+  // Movement numerals in this dataset are small. Restricting the accepted
+  // grammar also keeps musical key labels such as C and D from being read as
+  // the Roman numerals 100 and 500.
+  if (!/^(?:x{0,3})(?:ix|iv|v?i{0,3})$/i.test(value)) return null;
+  const values: Record<string, number> = { i: 1, v: 5, x: 10 };
   let total = 0;
   let previous = 0;
   for (const character of [...value.toLowerCase()].reverse()) {

@@ -125,15 +125,15 @@ async function main() {
       .from(schema.workPartV2)
       .where(
         and(
-          or(isNull(schema.workPartV2.label), eq(schema.workPartV2.label, '')),
-          or(isNull(schema.workPartV2.title), eq(schema.workPartV2.title, '')),
+          sql`trim(coalesce(${schema.workPartV2.label}, '')) = ''`,
+          sql`trim(coalesce(${schema.workPartV2.title}, '')) = ''`,
         ),
       ),
     db.select({ value: count() }).from(schema.composer).where(isNull(schema.composer.birthYear)),
     db
       .select({ value: count() })
       .from(schema.work)
-      .where(or(isNull(schema.work.form), eq(schema.work.form, ''))),
+      .where(sql`trim(coalesce(${schema.work.form}, '')) = ''`),
     db
       .select({
         id: schema.workPartV2.id,

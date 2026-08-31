@@ -24,6 +24,11 @@ test('flags punctuation and numeral variants as possible duplicate parts', () =>
     possiblePartDuplicateKey('VII', "July. The Reaper's Song"),
     possiblePartDuplicateKey('7', 'July: Reaper’s Song'),
   );
+  assert.notEqual(possiblePartDuplicateKey('C', 'major'), possiblePartDuplicateKey('100', 'major'));
+  assert.notEqual(
+    possiblePartDuplicateKey('D', 'flat major'),
+    possiblePartDuplicateKey('500', 'flat major'),
+  );
   assert.equal(possiblePartDuplicateKey(null, null), '');
 });
 
