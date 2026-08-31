@@ -209,10 +209,11 @@ function Hero({
               This recording’s tracks have not been mapped to movements yet.
             </p>
           )}
-          <ol className="m-0 flex list-none flex-col p-0">
+          {/* Ruled top and bottom as one programme, not movement by
+              movement — a rule per line buried the music in furniture. */}
+          <ol className="m-0 flex list-none flex-col border-y border-rule p-0">
             {work.movements.map((m) => {
               const playing = m.trackId !== null && currentTrackId === m.trackId;
-              const last = m.n === work.movements.length;
 
               /* A movement of the work that this recording doesn't carry.
                  Shown so the programme is the whole work, greyed out and
@@ -222,9 +223,7 @@ function Hero({
                   <li key={m.n} className="relative">
                     <div
                       title="This recording doesn't include this movement"
-                      className={`grid w-full grid-cols-[36px_1fr_auto_auto] items-baseline gap-4 border-t border-rule py-[10px] text-left opacity-40 select-none ${
-                        last ? 'border-b' : ''
-                      }`}
+                      className="grid w-full grid-cols-[36px_1fr_auto_auto] items-baseline gap-4 py-[10px] text-left opacity-40 select-none"
                     >
                       <span className="onum text-right font-display text-[22px] text-muted italic">
                         {numeralPrefix(m.roman)}
@@ -249,11 +248,7 @@ function Hero({
                   {playing && (
                     <span className="absolute top-1/2 -left-3 h-1 w-1 -translate-y-1/2 rounded-full bg-accent" />
                   )}
-                  <div
-                    className={`grid w-full grid-cols-[36px_1fr_auto_auto] items-baseline gap-4 border-t border-rule py-[10px] text-left hover:bg-paper-2 ${
-                      last ? 'border-b' : ''
-                    }`}
-                  >
+                  <div className="grid w-full grid-cols-[36px_1fr_auto_auto] items-baseline gap-4 py-[10px] text-left hover:bg-paper-2">
                     <button
                       type="button"
                       onClick={() => onPlay(m)}
@@ -473,7 +468,7 @@ function MoreByComposer({ composer, works }: { composer: string; works: WorkSumm
               </div>
             ))}
             {w.partCount > w.movements.length && (
-              <div className="mt-2 border-t border-rule pt-[6px] font-meta text-[10px] tracking-[0.12em] text-muted uppercase">
+              <div className="mt-[9px] font-meta text-[10px] tracking-[0.12em] text-muted uppercase">
                 + {w.partCount - w.movements.length} more movements
               </div>
             )}

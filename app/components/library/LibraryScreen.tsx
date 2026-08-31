@@ -198,7 +198,7 @@ function Masthead({
   const composers = new Set(works.map((w) => w.composerFull)).size;
 
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-6 border-b border-rule pt-[26px] pb-[14px] max-[900px]:pt-[18px] max-[900px]:pb-3">
+    <div className="flex flex-wrap items-baseline justify-between gap-6 pt-[26px] pb-1 max-[900px]:pt-[18px] max-[900px]:pb-1">
       <div className="flex items-center gap-3 text-muted">
         <span className="text-[10.5px] font-semibold tracking-[0.18em] uppercase">
           Your library
@@ -274,7 +274,7 @@ function Toolbar({
 
       <div className="ml-auto flex flex-wrap items-center gap-[10px] max-[900px]:ml-0 max-[900px]:w-full">
         <span className="font-meta text-[9px] tracking-[0.2em] text-muted uppercase">Sort</span>
-        <div className="no-bar flex gap-[2px] max-[900px]:order-3 max-[900px]:w-full max-[900px]:overflow-x-auto max-[900px]:border-t max-[900px]:border-rule max-[900px]:pt-[6px]">
+        <div className="no-bar flex gap-[2px] max-[900px]:order-3 max-[900px]:w-full max-[900px]:overflow-x-auto max-[900px]:pt-[6px]">
           {SORTS.map(([key, label]) => (
             <button
               key={key}

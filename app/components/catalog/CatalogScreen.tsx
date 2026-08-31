@@ -222,7 +222,7 @@ function ComposerPane({
               key={c.id}
               type="button"
               onClick={() => onSelect(c)}
-              className={`grid w-full cursor-pointer grid-cols-[30px_1fr_auto] items-center gap-[11px] border-b border-rule px-[18px] py-[7px] text-left hover:bg-paper-2 max-[900px]:px-4 ${
+              className={`grid w-full cursor-pointer grid-cols-[30px_1fr_auto] items-center gap-[11px] px-[18px] py-[7px] text-left hover:bg-paper-2 max-[900px]:px-4 ${
                 selectedId === c.id ? 'bg-paper-3' : ''
               }`}
             >
@@ -345,7 +345,7 @@ function WorkPane({
       {byGenre.map(([genre, group]) => (
         <Fragment key={genre ?? '\u0000unrecorded'}>
           <div
-            className={`border-b border-rule px-[18px] pt-3 pb-1 font-meta text-[9px] tracking-[0.2em] uppercase max-[900px]:px-4 ${
+            className={`border-b border-rule px-[18px] pt-4 pb-[6px] font-meta text-[9px] tracking-[0.2em] uppercase max-[900px]:px-4 ${
               genre === null ? 'text-accent' : 'text-muted'
             }`}
           >
@@ -356,7 +356,7 @@ function WorkPane({
               key={w.id}
               type="button"
               onClick={() => onSelect(w)}
-              className={`grid w-full cursor-pointer grid-cols-[1fr_auto] items-baseline gap-3 border-b border-rule px-[18px] py-[9px] text-left hover:bg-paper-2 max-[900px]:px-4 ${
+              className={`grid w-full cursor-pointer grid-cols-[1fr_auto] items-baseline gap-3 px-[18px] py-[9px] text-left hover:bg-paper-2 max-[900px]:px-4 ${
                 selectedId === w.id ? 'bg-paper-3' : ''
               }`}
             >

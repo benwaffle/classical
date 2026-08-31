@@ -68,7 +68,7 @@ export function UnmatchedStrip({ tracks }: { tracks: UnmatchedTrack[] }) {
             return (
               <div
                 key={t.id}
-                className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_150px] items-baseline gap-[14px] border-b border-rule py-[6px] max-[900px]:grid-cols-[minmax(0,1fr)_auto] max-[900px]:gap-x-[14px] max-[900px]:gap-y-[2px] max-[900px]:py-2"
+                className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_150px] items-baseline gap-[14px] py-[7px] max-[900px]:grid-cols-[minmax(0,1fr)_auto] max-[900px]:gap-x-[14px] max-[900px]:gap-y-[2px] max-[900px]:py-2"
               >
                 <span
                   className={`truncate font-display text-[14px] text-ink-2 ${done ? 'opacity-50' : ''}`}

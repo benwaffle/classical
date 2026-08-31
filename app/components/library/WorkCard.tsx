@@ -127,6 +127,8 @@ export function WorkCard({
         </div>
       </div>
 
+      {/* The left rule is the only line this column needs: the rows inside
+          are set by rhythm, not ruled off one from the next. */}
       <div className="flex min-w-0 flex-col border-l border-rule pl-[18px] max-[900px]:col-span-full max-[900px]:mt-1 max-[900px]:border-t max-[900px]:border-l-0 max-[900px]:pt-1 max-[900px]:pl-0">
         {shown.map((m) => (
           <MovementRow
@@ -143,7 +145,7 @@ export function WorkCard({
         {extra > 0 && (
           <Link
             href={href}
-            className="mt-[7px] inline-block self-start border-t border-b border-t-rule border-b-transparent pt-[6px] font-meta text-[9px] tracking-[0.16em] text-muted uppercase no-underline transition-colors duration-150 hover:border-b-muted"
+            className="mt-[9px] inline-block self-start border-b border-transparent font-meta text-[9px] tracking-[0.16em] text-muted uppercase no-underline transition-colors duration-150 hover:border-muted"
           >
             + {extra} more movement{extra !== 1 ? 's' : ''}
           </Link>
@@ -178,7 +180,7 @@ function MovementRow({
     return (
       <div
         title="This recording doesn't include this movement"
-        className="grid grid-cols-[15px_22px_minmax(0,1fr)_auto] items-baseline gap-3 border-b border-rule py-1 pr-[2px] opacity-40 select-none last:border-b-0"
+        className="grid grid-cols-[15px_22px_minmax(0,1fr)_auto] items-baseline gap-3 py-[3px] pr-[2px] opacity-40 select-none"
       >
         <span aria-hidden />
         <span className="onum text-right font-display text-[13px] text-muted italic">
@@ -203,7 +205,7 @@ function MovementRow({
       onKeyDown={(e) => {
         if (e.key === 'Enter') onPlay();
       }}
-      className={`relative grid cursor-pointer grid-cols-[15px_22px_minmax(0,1fr)_auto] items-baseline gap-3 border-b border-rule py-1 pr-[2px] last:border-b-0 hover:bg-paper-2 focus-visible:outline focus-visible:-outline-offset-1 focus-visible:outline-ink-2 ${
+      className={`relative grid cursor-pointer grid-cols-[15px_22px_minmax(0,1fr)_auto] items-baseline gap-3 rounded-[2px] py-[3px] pr-[2px] hover:bg-paper-2 focus-visible:outline focus-visible:-outline-offset-1 focus-visible:outline-ink-2 ${
         isSelected ? 'bg-paper-3 shadow-[inset_0_0_0_1px_var(--rule)]' : ''
       }`}
     >
