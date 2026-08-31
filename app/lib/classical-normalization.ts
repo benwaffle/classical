@@ -78,3 +78,30 @@ export function possiblePartDuplicateKey(label: string | null, title: string | n
   if (number !== null) tokens[0] = String(number);
   return tokens.filter((token, index) => index === 0 || token !== 'the').join(' ');
 }
+
+/**
+ * A single canonical identity for a catalog reference, e.g. `op34/2`.
+ *
+ * Catalog text reaches us in many surface forms for the same identity:
+ * `Op. 34 No. 2` / `Op 34/2`, `Hob. VIIe:1` / `Hob VIIe/1`, and the Scarlatti
+ * `Kk. 1` that some sources split into system `K` plus number `K.1`. Comparing
+ * the system and the number separately cannot bridge those, so this joins them
+ * and reduces every group separator to `/`.
+ *
+ * Returns `''` when the work is not catalogued, which never compares equal.
+ */
+export function canonicalCatalogKey(
+  system: string | null | undefined,
+  number: string | null | undefined,
+) {
+  if (!system?.trim() || !number?.trim()) return '';
+  return `${system} ${number}`
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[,\s]*\bn[or]s?\.?\s*(?=[0-9ivx])/g, '/')
+    .replace(/[:/]+/g, '/')
+    .replace(/[^0-9a-z/]+/g, '')
+    .replace(/\/+/g, '/')
+    .replace(/^\/|\/$/g, '');
+}

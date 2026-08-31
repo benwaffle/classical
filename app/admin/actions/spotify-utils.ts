@@ -19,7 +19,7 @@ import {
   workPartV2,
 } from '@/lib/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
-import { normalizeCatalogNumber, normalizeCatalogSystem } from '@/lib/classical-normalization';
+import { canonicalCatalogKey } from '@/lib/classical-normalization';
 import { selectCanonicalWorkCandidate } from '@/lib/work-matching';
 
 export async function upsertWork(
@@ -48,39 +48,37 @@ export async function upsertWork(
   let existingWork: WorkRow | undefined;
 
   if (catalogSystem && catalogNumber) {
-    const candidates = await database
-      .select()
+    // Match on the canonical catalog identity rather than the system and number
+    // separately: the same reference arrives as `Op. 34 No. 2` and `Op 34/2`,
+    // and comparing the halves treats those as two different works.
+    const wanted = canonicalCatalogKey(catalogSystem, catalogNumber);
+    const composerWorks = await database.select().from(work).where(eq(work.composerId, composerId));
+    const alsoKnownAs = await database
+      .select({
+        workId: workCatalogV2.workId,
+        system: workCatalogV2.system,
+        number: workCatalogV2.number,
+      })
       .from(workCatalogV2)
       .innerJoin(work, eq(workCatalogV2.workId, work.id))
-      .where(
-        and(
-          eq(work.composerId, composerId),
-          eq(workCatalogV2.normalizedSystem, normalizeCatalogSystem(catalogSystem)),
-          eq(workCatalogV2.normalizedNumber, normalizeCatalogNumber(catalogNumber)),
-        ),
+      .where(eq(work.composerId, composerId));
+    const matchedByCatalogRow = new Set(
+      alsoKnownAs
+        .filter((row) => canonicalCatalogKey(row.system, row.number) === wanted)
+        .map((row) => row.workId),
+    );
+    const candidates = composerWorks.filter(
+      (candidate) =>
+        canonicalCatalogKey(candidate.catalogSystem, candidate.catalogNumber) === wanted ||
+        matchedByCatalogRow.has(candidate.id),
+    );
+    existingWork = selectCanonicalWorkCandidate(candidates, title) ?? undefined;
+    if (!existingWork && candidates.length > 1) {
+      throw new Error(
+        `Ambiguous catalog identity ${wanted} for composer ${composerId}: works ` +
+          `${candidates.map((candidate) => candidate.id).join(', ')}. ` +
+          `Resolve with pnpm metadata:dedupe-works.`,
       );
-    existingWork =
-      selectCanonicalWorkCandidate(
-        candidates.map((candidate) => candidate.work),
-        title,
-      ) ?? undefined;
-    if (!existingWork) {
-      if (candidates.length > 1) {
-        throw new Error(
-          `Ambiguous normalized catalog ${catalogSystem} ${catalogNumber} for composer ${composerId}`,
-        );
-      }
-      [existingWork] = await database
-        .select()
-        .from(work)
-        .where(
-          and(
-            eq(work.composerId, composerId),
-            eq(work.catalogSystem, catalogSystem),
-            eq(work.catalogNumber, catalogNumber),
-          ),
-        )
-        .limit(1);
     }
   } else {
     [existingWork] = await database

@@ -62,6 +62,14 @@ automatically. The default output includes representative affected IDs; use
 `pnpm metadata:validate --details` for complete lists or
 `pnpm --silent metadata:validate --json` for machine-readable output.
 
+A backlog item leaves the count only when a decision is written to
+`metadata_migration_audit` — including "reviewed, this value genuinely does not
+exist". The validator prints what those decisions closed, so the backlog reaching
+zero never hides a gap. See `docs/metadata-quality.md`.
+
+`pnpm metadata:dedupe-works` collapses works that share a composer and a
+canonical catalog identity. Dry run by default; `--apply` writes.
+
 ## Tools
 
 Use `turso db shell spotify-classical "<query>"` to execute SQL queries

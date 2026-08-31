@@ -8,13 +8,32 @@ async function main() {
     throw new Error('TURSO_DATABASE_URL is required');
   }
 
-  const [{ db }, schema, drizzle] = await Promise.all([
+  const [{ db }, schema, drizzle, { reviewedAs }] = await Promise.all([
     import('@/lib/db'),
     import('@/lib/db/schema'),
     import('drizzle-orm'),
+    import('@/lib/db/expressions'),
   ]);
-  const { and, count, countDistinct, eq, isNull, ne, or, sql } = drizzle;
-  const { normalizeMetadataText, possiblePartDuplicateKey } =
+  const { and, count, countDistinct, eq, isNull, ne, not, or, sql } = drizzle;
+
+  // A gap someone has ruled on is no longer part of the backlog. The decision
+  // and its reason stay in metadata_migration_audit.
+  const unreviewed = {
+    emptyRecording: not(reviewedAs('recording_v2', 'unmatched_on_album', schema.recordingV2.id)),
+    unnamedPart: not(reviewedAs('work_part_v2', 'no_part_name', schema.workPartV2.id)),
+    composerBirthYear: not(reviewedAs('composer', 'no_birth_year', schema.composer.id)),
+    workForm: not(reviewedAs('work', 'no_form', schema.work.id)),
+    // A link is addressed by its track and part together, so its review is
+    // recorded under the pair.
+    flaggedLink: not(
+      reviewedAs(
+        'track_work_part_v2',
+        'unresolved_link',
+        sql`${schema.trackWorkPartV2.spotifyTrackId} || ':' || ${schema.trackWorkPartV2.workPartId}`,
+      ),
+    ),
+  };
+  const { canonicalCatalogKey, normalizeMetadataText, possiblePartDuplicateKey } =
     await import('@/lib/classical-normalization');
 
   const [
@@ -35,6 +54,8 @@ async function main() {
     [worksWithoutForm],
     allParts,
     allWorks,
+    keptSeparate,
+    recordedReviews,
   ] = await Promise.all([
     db.select({ value: count() }).from(schema.spotifyTrack),
     db
@@ -78,7 +99,7 @@ async function main() {
     db
       .select({ value: count() })
       .from(schema.trackWorkPartV2)
-      .where(eq(schema.trackWorkPartV2.matchStatus, 'needs_review')),
+      .where(and(eq(schema.trackWorkPartV2.matchStatus, 'needs_review'), unreviewed.flaggedLink)),
     db
       .select({ value: countDistinct(schema.spotifyTrack.spotifyId) })
       .from(schema.spotifyTrack)
@@ -100,7 +121,7 @@ async function main() {
         schema.recordingTrackV2,
         eq(schema.recordingTrackV2.recordingId, schema.recordingV2.id),
       )
-      .where(isNull(schema.recordingTrackV2.recordingId)),
+      .where(and(isNull(schema.recordingTrackV2.recordingId), unreviewed.emptyRecording)),
     db
       .select({ value: countDistinct(schema.recordingV2.id) })
       .from(schema.recordingV2)
@@ -113,12 +134,15 @@ async function main() {
       .select({ value: count() })
       .from(schema.recordingV2)
       .where(
-        sql`NOT EXISTS (
-          SELECT 1
-          FROM recording_track_v2 member
-          JOIN track_work_part_v2 link ON link.spotify_track_id = member.spotify_track_id
-          WHERE member.recording_id = ${schema.recordingV2.id}
-        )`,
+        and(
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM recording_track_v2 member
+            JOIN track_work_part_v2 link ON link.spotify_track_id = member.spotify_track_id
+            WHERE member.recording_id = ${schema.recordingV2.id}
+          )`,
+          unreviewed.emptyRecording,
+        ),
       ),
     db
       .select({ value: count() })
@@ -127,13 +151,17 @@ async function main() {
         and(
           sql`trim(coalesce(${schema.workPartV2.label}, '')) = ''`,
           sql`trim(coalesce(${schema.workPartV2.title}, '')) = ''`,
+          unreviewed.unnamedPart,
         ),
       ),
-    db.select({ value: count() }).from(schema.composer).where(isNull(schema.composer.birthYear)),
+    db
+      .select({ value: count() })
+      .from(schema.composer)
+      .where(and(isNull(schema.composer.birthYear), unreviewed.composerBirthYear)),
     db
       .select({ value: count() })
       .from(schema.work)
-      .where(sql`trim(coalesce(${schema.work.form}, '')) = ''`),
+      .where(and(sql`trim(coalesce(${schema.work.form}, '')) = ''`, unreviewed.workForm)),
     db
       .select({
         id: schema.workPartV2.id,
@@ -143,8 +171,37 @@ async function main() {
       })
       .from(schema.workPartV2),
     db
-      .select({ id: schema.work.id, composerId: schema.work.composerId, title: schema.work.title })
+      .select({
+        id: schema.work.id,
+        composerId: schema.work.composerId,
+        title: schema.work.title,
+        catalogSystem: schema.work.catalogSystem,
+        catalogNumber: schema.work.catalogNumber,
+      })
       .from(schema.work),
+    db
+      .select({ sourceId: schema.metadataMigrationAudit.sourceId })
+      .from(schema.metadataMigrationAudit)
+      .where(
+        and(
+          eq(schema.metadataMigrationAudit.entityType, 'work'),
+          eq(schema.metadataMigrationAudit.decision, 'keep_separate'),
+        ),
+      ),
+    db
+      .select({ decision: schema.metadataMigrationAudit.decision, value: count() })
+      .from(schema.metadataMigrationAudit)
+      .where(
+        drizzle.inArray(schema.metadataMigrationAudit.decision, [
+          'keep_separate',
+          'unmatched_on_album',
+          'no_part_name',
+          'no_birth_year',
+          'no_form',
+          'unresolved_link',
+        ]),
+      )
+      .groupBy(schema.metadataMigrationAudit.decision),
   ]);
 
   const duplicatePartGroups = new Map<string, number[]>();
@@ -158,16 +215,46 @@ async function main() {
     ([, ids]) => ids.length > 1,
   );
 
-  const duplicateWorkGroups = new Map<string, number[]>();
-  for (const item of allWorks) {
+  // A work reviewed as deliberately distinct is not a duplicate candidate.
+  const keepSeparateWorks = new Set(keptSeparate.map((row) => Number(row.sourceId)));
+  const comparableWorks = allWorks.filter((item) => !keepSeparateWorks.has(item.id));
+
+  // Same composer plus same canonical catalog identity is not a candidate but a
+  // contradiction: two rows claim to be the same work. It also stops ingestion,
+  // because upsertWork rejects the identity as ambiguous.
+  const catalogIdentities = new Map<string, number[]>();
+  for (const item of comparableWorks) {
+    const key = canonicalCatalogKey(item.catalogSystem, item.catalogNumber);
+    if (!key) continue;
+    const groupKey = `${item.composerId}:${key}`;
+    catalogIdentities.set(groupKey, [...(catalogIdentities.get(groupKey) ?? []), item.id]);
+  }
+  const duplicateCatalogGroups = [...catalogIdentities.entries()].filter(
+    ([, ids]) => ids.length > 1,
+  );
+
+  // Title collisions are only worth reviewing when the catalog does not already
+  // separate the rows. A composer really does write many works called
+  // "Concerto for strings in G minor"; what distinguishes them is RV 152 from
+  // RV 153, so flagging those as duplicates buries the genuine cases.
+  const duplicateWorkGroups = new Map<string, typeof comparableWorks>();
+  for (const item of comparableWorks) {
     const key = normalizeMetadataText(item.title);
     if (!key) continue;
     const groupKey = `${item.composerId}:${key}`;
-    duplicateWorkGroups.set(groupKey, [...(duplicateWorkGroups.get(groupKey) ?? []), item.id]);
+    duplicateWorkGroups.set(groupKey, [...(duplicateWorkGroups.get(groupKey) ?? []), item]);
   }
-  const likelyDuplicateWorkGroups = [...duplicateWorkGroups.entries()].filter(
-    ([, ids]) => ids.length > 1,
-  );
+  const likelyDuplicateWorkGroups = [...duplicateWorkGroups.entries()]
+    .filter(([, items]) => {
+      if (items.length < 2) return false;
+      const keys = new Set(
+        items
+          .map((item) => canonicalCatalogKey(item.catalogSystem, item.catalogNumber))
+          .filter(Boolean),
+      );
+      return keys.size < items.length;
+    })
+    .map(([key, items]) => [key, items.map((item) => item.id)] as const);
 
   const detailLimit = allDetails ? 10_000 : 5;
   const [emptyRecordingRows, unnamedPartRows, missingComposerRows, missingFormRows] =
@@ -182,10 +269,13 @@ async function main() {
             })
             .from(schema.recordingV2)
             .where(
-              sql`NOT EXISTS (
-                SELECT 1 FROM recording_track_v2 member
-                WHERE member.recording_id = ${schema.recordingV2.id}
-              )`,
+              and(
+                sql`NOT EXISTS (
+                  SELECT 1 FROM recording_track_v2 member
+                  WHERE member.recording_id = ${schema.recordingV2.id}
+                )`,
+                unreviewed.emptyRecording,
+              ),
             )
             .limit(detailLimit),
           db
@@ -199,13 +289,14 @@ async function main() {
               and(
                 sql`trim(coalesce(${schema.workPartV2.label}, '')) = ''`,
                 sql`trim(coalesce(${schema.workPartV2.title}, '')) = ''`,
+                unreviewed.unnamedPart,
               ),
             )
             .limit(detailLimit),
           db
             .select({ composerId: schema.composer.id, name: schema.composer.name })
             .from(schema.composer)
-            .where(isNull(schema.composer.birthYear))
+            .where(and(isNull(schema.composer.birthYear), unreviewed.composerBirthYear))
             .limit(detailLimit),
           db
             .select({
@@ -214,7 +305,7 @@ async function main() {
               title: schema.work.title,
             })
             .from(schema.work)
-            .where(sql`trim(coalesce(${schema.work.form}, '')) = ''`)
+            .where(and(sql`trim(coalesce(${schema.work.form}, '')) = ''`, unreviewed.workForm))
             .limit(detailLimit),
         ]);
 
@@ -336,6 +427,7 @@ async function main() {
     duplicateWorkPartPositions: duplicatePositions.value,
     unclassifiedUnlinkedTracks: unclassifiedUnlinkedTracks.value,
     memberRecordingsWithoutPopularity: memberRecordingsWithoutPopularity.value,
+    duplicateCatalogWorks: duplicateCatalogGroups.length,
   };
   const reviewBacklog = {
     needsReviewLinks: needsReview.value,
@@ -367,6 +459,11 @@ async function main() {
     duplicateWorkPartPositions: duplicatePositionRows,
     unclassifiedUnlinkedTracks: unclassifiedUnlinkedTrackRows,
     memberRecordingsWithoutPopularity: memberRecordingWithoutPopularityRows,
+    duplicateCatalogWorks: duplicateCatalogGroups.slice(0, detailLimit).map(([key, ids]) => ({
+      composerId: Number(key.slice(0, key.indexOf(':'))),
+      catalogIdentity: key.slice(key.indexOf(':') + 1),
+      workIds: ids,
+    })),
   };
   const reviewDetails = {
     recordingsWithoutMembers: emptyRecordingRows,
@@ -397,6 +494,7 @@ async function main() {
     'duplicateWorkPartPositions',
     'unclassifiedUnlinkedTracks',
     'memberRecordingsWithoutPopularity',
+    'duplicateCatalogWorks',
   ]);
   const hasHardFailures = [...failingMetrics].some(
     (metric) => hardInvariants[metric as keyof typeof hardInvariants] > 0,
@@ -409,6 +507,9 @@ async function main() {
           ok: !hasHardFailures,
           hardInvariants,
           reviewBacklog,
+          closedByReview: Object.fromEntries(
+            recordedReviews.map((row) => [row.decision, row.value]),
+          ),
           ...(allDetails ? { details } : {}),
         },
         null,
@@ -428,6 +529,13 @@ async function main() {
     console.table(
       Object.entries(reviewBacklog).map(([metric, value]) => ({ metric, count: value })),
     );
+    if (recordedReviews.length > 0) {
+      console.log(
+        '\nClosed by a recorded review decision — these rows still have the gap;' +
+          '\nsomeone looked and wrote down why in metadata_migration_audit.',
+      );
+      console.table(recordedReviews.map((row) => ({ decision: row.decision, rows: row.value })));
+    }
 
     const samples = allDetails ? 'Details' : 'Samples';
     for (const [name, rows] of Object.entries(hardViolationDetails)) {

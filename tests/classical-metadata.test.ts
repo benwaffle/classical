@@ -4,6 +4,7 @@ import { QueryBuilder } from 'drizzle-orm/sqlite-core';
 import { mappedTrackCount } from '../app/lib/db/expressions';
 import { recordingV2 } from '../app/lib/db/schema';
 import {
+  canonicalCatalogKey,
   formatWorkPart,
   normalizeCatalogNumber,
   normalizeCatalogSystem,
@@ -20,6 +21,29 @@ import { likedSongsDatabaseName } from '../app/lib/liked-songs-cache';
 test('normalizes catalog punctuation without changing display data', () => {
   assert.equal(normalizeCatalogSystem('K.'), normalizeCatalogSystem(' K '));
   assert.equal(normalizeCatalogNumber('6 No. 4'), normalizeCatalogNumber('6 No.4'));
+});
+
+test('gives one catalog identity to every spelling of the same reference', () => {
+  const same = (left: [string, string], right: [string, string]) =>
+    assert.equal(canonicalCatalogKey(...left), canonicalCatalogKey(...right));
+
+  same(['Op.', '34 No. 2'], ['Op', '34/2']);
+  same(['Op.', '34, No. 2'], ['Op', '34/2']);
+  same(['Hob.', 'VIIe:1'], ['Hob', 'VIIe/1']);
+  same(['K.', '626'], ['K', '626']);
+  // Some sources split the Scarlatti Kirkpatrick number across both fields.
+  same(['K', 'K.1'], ['Kk.', '1']);
+  same(['KK', 'IVa No. 12'], ['KK', 'IVa/12']);
+});
+
+test('keeps different catalog numbers apart and refuses to identify uncatalogued works', () => {
+  assert.notEqual(canonicalCatalogKey('RV', '152'), canonicalCatalogKey('RV', '153'));
+  assert.notEqual(canonicalCatalogKey('Op.', '34/2'), canonicalCatalogKey('Op.', '34/3'));
+  assert.notEqual(canonicalCatalogKey('BWV', '618'), canonicalCatalogKey('BWV', '656'));
+  // A missing half is not an identity, so two uncatalogued works never match.
+  assert.equal(canonicalCatalogKey('Op. posth.', null), '');
+  assert.equal(canonicalCatalogKey(null, '626'), '');
+  assert.equal(canonicalCatalogKey('  ', ' '), '');
 });
 
 test('flags punctuation and numeral variants as possible duplicate parts', () => {

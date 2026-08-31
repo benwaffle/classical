@@ -10,10 +10,13 @@ The production metadata is structurally valid only when all of the following hol
 - `(work_id, position)` is unique in `work_part_v2`;
 - each Spotify track belongs to at most one recording;
 - combined tracks may retain multiple part links;
-- split movements may link one part to multiple tracks; and
-- every stored unlinked track is explicitly terminal `not_classical` rather than silently unexplained.
+- split movements may link one part to multiple tracks;
+- every stored unlinked track is explicitly terminal `not_classical` rather than silently unexplained; and
+- no two works of one composer share a canonical catalog identity.
 
 `pnpm metadata:validate` is both the structural validator and metadata audit. Its output separates `hardInvariants` from the non-failing `reviewBacklog`. A nonzero `needsReview` count is reported but is not itself a structural failure: review flags represent semantic uncertainty that was preserved instead of overwritten.
+
+`duplicateCatalogWorks` is a hard invariant rather than a review item because it is not a similarity guess. Same composer plus same canonical catalog identity means two rows claim to be the same work, and `upsertWork` then rejects that identity as ambiguous, so ingestion of the affected work stops until the rows are collapsed. `pnpm metadata:dedupe-works` reports the groups and `--apply` collapses them.
 
 The default human-readable report includes counts plus five representative rows for each nonempty backlog or violation. Use `pnpm metadata:validate --details` for complete affected-row lists. For automation, `pnpm --silent metadata:validate --json` emits strict summary JSON; add `--details` when the consumer also needs every affected ID and duplicate-candidate group.
 
@@ -30,27 +33,59 @@ The default human-readable report includes counts plus five representative rows 
 
 Do not clear review status in bulk merely to reach zero. Resolve the underlying work, part, or recording ambiguity first.
 
+## Recording a review decision
+
+The review backlog is a queue, not a census. Some gaps are not tasks: `Traditional`
+has no birth year, a soundtrack cue is not written in a catalogued form, and a
+single-movement work's only part has no movement name to give it. Counting those
+forever would bury the gaps that someone can still close.
+
+A gap leaves the backlog only when a row in `metadata_migration_audit` records
+who ruled on it and why. The validator subtracts exactly those rows and prints
+what it subtracted under **Closed by a recorded review decision**, so the numbers
+never quietly shrink.
+
+| `entity_type`        | `decision`           | Means                                                                |
+| -------------------- | -------------------- | -------------------------------------------------------------------- |
+| `work`               | `keep_separate`      | Shares a title or catalog with another work but is a different piece |
+| `work`               | `no_form`            | Not written in a catalogued classical form                           |
+| `composer`           | `no_birth_year`      | No source states one, or the row is not one person                   |
+| `work_part_v2`       | `no_part_name`       | Single-movement work whose only part the work title already names    |
+| `recording_v2`       | `unmatched_on_album` | The album contributes no matched track to this work                  |
+| `track_work_part_v2` | `unresolved_link`    | The source does not establish which part the track is                |
+
+`source_id` is the row's id as text; for a link it is `<spotifyTrackId>:<workPartId>`.
+Write the reason in full sentences — it is the whole value of the row. Deleting
+the audit row puts the item back in the backlog, which is the right move when new
+evidence arrives.
+
 ## Production snapshot
 
-As of 2026-08-30 after the popularity backfill and restored Zimmer exclusion:
+As of 2026-08-31, after the catalog-identity deduplication and the review pass
+that cleared the backlog:
 
-| Metric                                    | Count |
-| ----------------------------------------- | ----: |
-| Stored Spotify tracks                     | 9,960 |
-| Tracks with canonical part links          | 9,699 |
-| Track-to-part links                       | 9,992 |
-| Queue `matched`                           | 9,251 |
-| Queue `not_classical`                     |   315 |
-| `needs_review` links                      |   175 |
-| Recordings with member-derived popularity | 4,515 |
-| Empty, explicitly unranked recordings     |    77 |
-| Part links without recordings             |     0 |
-| Recording members without parts           |     0 |
-| Cross-work links                          |     0 |
-| Duplicate work-part positions             |     0 |
-| Unclassified unlinked stored tracks       |     0 |
+| Metric                             | Count |
+| ---------------------------------- | ----: |
+| Stored Spotify tracks              | 9,960 |
+| Tracks with canonical part links   | 9,696 |
+| Track-to-part links                | 9,989 |
+| Works                              | 3,128 |
+| Composers                          |   651 |
+| Work parts                         | 8,113 |
+| Recordings                         | 4,452 |
+| Queue `matched`                    | 9,248 |
+| Queue `not_classical`              |   318 |
+| Outstanding review-backlog items   |     0 |
+| Gaps closed by a recorded decision |   359 |
 
-This table is an operational snapshot, not a test fixture. Counts will change as albums are added or review items are repaired; the zero-valued invariant rows should remain zero.
+Every hard invariant is zero. This table is an operational snapshot, not a test
+fixture: counts will change as albums are added, and the zero-valued invariant
+rows should remain zero.
+
+The 2026-08-30 snapshot listed 3,462 works and 175 `needs_review` links. The work
+count fell because 309 rows were duplicates of works already present — the same
+catalog reference spelled differently — not because any music was dropped; the
+tracks moved to the surviving work.
 
 ## Known quality decisions
 
@@ -61,8 +96,24 @@ This table is an operational snapshot, not a test fixture. Counts will change as
 - Roman numerals are stored labels, not generated from `position`. This prevents duplicated or misleading display numerals.
 - `recording_v2.popularity` is the rounded mean of the recording members’ cached Spotify track popularity. Ingestion refreshes it whenever membership changes. Empty recordings remain null and are visibly unranked.
 - Queue submission and retry logic preserve terminal `not_classical` rows. On 2026-08-30, 257 unlinked Hans Zimmer rows that had regressed to `pending` were restored to `not_classical`.
+- Barber's Op. 11 covers the String Quartet and its derivations. The Adagio for Strings and the Agnus Dei are separately performed pieces with different forces, so the shared opus does not collapse them (`keep_separate`).
+- Disc 2 of “Harpsichord Music by the Young J.S. Bach, Vol. 2” carries a contiguous eight-movement keyboard suite (Overture, Aria, Gavotte en Rondeau, Bourrée, Menuets I–III, Gigue). Seven movements had been assigned to BWV 1068, whose movements are Ouverture, Air, Gavotte, Bourrée and Gigue with no Menuets, and the Gigue to BWV 831. They are now their own work with no catalog number, because the album names none.
+- Three spoken tracks from “Mozart's Requiem – An Audio Documentary” were linked to Requiem movements. They are talk about the work, not performances of it, and are now terminal `not_classical`.
+- A composer is keyed by one Spotify artist id, and Spotify sometimes lists one composer twice (`Jacques Duphly` / `Jaques Duphly`, two `Frank Martin` ids). Those rows stay separate: merging them would drop an artist mapping that ingestion would immediately recreate. Uniting them needs a composer-to-artist relation the schema does not have yet.
 
 Material work merges/removals should be recorded in `metadata_migration_audit` with a reason.
+
+## Known gaps
+
+- **Part canonicalisation across merged works.** Collapsing duplicate works
+  brings each source's movement rows with it, and the same movement spelled two
+  ways stays two parts. Rows are merged only on the deterministic key the
+  validator uses, so the residue is visible rather than guessed at. There is no
+  safe general rule: a two-movement `Prelude and Fugue in B-flat major` and a
+  single waltz listed twice look alike to every similarity measure tried.
+- **Parts with no track links** (129 as of 2026-08-31). Either a movement no
+  recording we hold has matched, or a row left behind by a reassignment. Not yet
+  measured by the validator, because the two cases need separating first.
 
 ## Safe repair procedure
 
