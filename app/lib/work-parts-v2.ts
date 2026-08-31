@@ -222,6 +222,13 @@ async function resolveWorkPart(
       : [];
   if (exact.length === 1) return preserveCanonicalPosition(exact[0]);
 
+  // A complete printed label identifies the canonical leaf. Spotify often
+  // supplies shorter or longer title variants for that same movement.
+  const labelMatches = normalizedLabel
+    ? existing.filter((part) => normalizeMetadataText(part.label) === normalizedLabel)
+    : [];
+  if (labelMatches.length === 1) return preserveCanonicalPosition(labelMatches[0]);
+
   const titleMatches = normalizedTitle
     ? existing.filter((part) => normalizeMetadataText(part.title) === normalizedTitle)
     : [];

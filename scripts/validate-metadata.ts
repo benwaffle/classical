@@ -11,7 +11,7 @@ async function main() {
     import('@/lib/db/schema'),
     import('drizzle-orm'),
   ]);
-  const { count, countDistinct, eq, isNull, ne, sql } = drizzle;
+  const { and, count, countDistinct, eq, isNull, ne, or, sql } = drizzle;
 
   const [
     [storedTracks],
@@ -22,6 +22,7 @@ async function main() {
     [crossWorkLinks],
     [duplicatePositions],
     [needsReview],
+    [unclassifiedUnlinkedTracks],
   ] = await Promise.all([
     db.select({ value: count() }).from(schema.spotifyTrack),
     db
@@ -66,6 +67,20 @@ async function main() {
       .select({ value: count() })
       .from(schema.trackWorkPartV2)
       .where(eq(schema.trackWorkPartV2.matchStatus, 'needs_review')),
+    db
+      .select({ value: countDistinct(schema.spotifyTrack.spotifyId) })
+      .from(schema.spotifyTrack)
+      .leftJoin(
+        schema.trackWorkPartV2,
+        eq(schema.trackWorkPartV2.spotifyTrackId, schema.spotifyTrack.spotifyId),
+      )
+      .leftJoin(schema.matchQueue, eq(schema.matchQueue.spotifyId, schema.spotifyTrack.spotifyId))
+      .where(
+        and(
+          isNull(schema.trackWorkPartV2.spotifyTrackId),
+          or(isNull(schema.matchQueue.status), ne(schema.matchQueue.status, 'not_classical')),
+        ),
+      ),
   ]);
 
   const report = {
@@ -77,15 +92,16 @@ async function main() {
     crossWorkLinks: crossWorkLinks.value,
     duplicateWorkPartPositions: duplicatePositions.value,
     needsReview: needsReview.value,
+    unclassifiedUnlinkedTracks: unclassifiedUnlinkedTracks.value,
   };
   console.log(report);
 
   if (
-    report.linkedTracks !== report.storedTracks ||
     report.tracksWithoutRecording > 0 ||
     report.recordingTracksWithoutParts > 0 ||
     report.crossWorkLinks > 0 ||
-    report.duplicateWorkPartPositions > 0
+    report.duplicateWorkPartPositions > 0 ||
+    report.unclassifiedUnlinkedTracks > 0
   ) {
     process.exitCode = 2;
   }
