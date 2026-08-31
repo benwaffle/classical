@@ -41,7 +41,7 @@ to the reader.
 Concretely, don't:
 
 - invent a placeholder that reads like real data (`"Movement 3"`, `"Unknown
-  performer"`, an era guessed from a missing birth year)
+performer"`, an era guessed from a missing birth year)
 - silently drop rows we can't render — a work whose recording has no matched
   tracks still belongs in the list, marked
 - substitute a proxy for a missing field and present it as the real thing (e.g.
@@ -49,21 +49,21 @@ Concretely, don't:
 - imply an ordering that the data can't support
 
 Instead: leave it blank, or label it as missing/unmatched, and keep the row
-visible. Preferring the better of two *real* values (the fullest recording of a
+visible. Preferring the better of two _real_ values (the fullest recording of a
 work, the credited artist when the composer is the only artist) is fine — that's
 a choice between things we actually know.
 
 Known gaps as of 2026-08-30, all of which the UI should surface rather than mask:
 
-| Gap | Extent |
-| --- | --- |
-| `recording_v2.popularity` unpopulated | 4924 of 4924 — every "sort by popularity" surface is really unordered |
-| recordings with no tracks mapped to movements | 291 |
-| `work_part_v2` rows with neither label nor title | 261 |
-| works with duplicate parts — the same movement matched twice under different punctuation, e.g. work 1008 has both `VII July. The Reaper's Song` and `7 July: Reaper's Song` | 186 works, 264 redundant rows |
-| composers with no `birth_year` (so no derived era) | 290 of 651 |
-| works with no `form` (so no catalogue genre) | 109 |
-| duplicate works | e.g. Tchaikovsky's Nutcracker as both `Op 71` and `Op 71 (TH 14)` |
+| Gap                                                                                                                                                                         | Extent                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `recording_v2.popularity` unpopulated                                                                                                                                       | 4924 of 4924 — every "sort by popularity" surface is really unordered |
+| recordings with no tracks mapped to movements                                                                                                                               | 291                                                                   |
+| `work_part_v2` rows with neither label nor title                                                                                                                            | 261                                                                   |
+| works with duplicate parts — the same movement matched twice under different punctuation, e.g. work 1008 has both `VII July. The Reaper's Song` and `7 July: Reaper's Song` | 186 works, 264 redundant rows                                         |
+| composers with no `birth_year` (so no derived era)                                                                                                                          | 290 of 651                                                            |
+| works with no `form` (so no catalogue genre)                                                                                                                                | 109                                                                   |
+| duplicate works                                                                                                                                                             | e.g. Tchaikovsky's Nutcracker as both `Op 71` and `Op 71 (TH 14)`     |
 
 ## Tools
 

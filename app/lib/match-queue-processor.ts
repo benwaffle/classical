@@ -284,11 +284,13 @@ export async function claimNextPendingAlbum(
   return null;
 }
 
-export async function prepareMatchQueue(options: {
-  maxAttempts?: number;
-  staleMinutes?: number;
-  retryFailed?: boolean;
-} = {}) {
+export async function prepareMatchQueue(
+  options: {
+    maxAttempts?: number;
+    staleMinutes?: number;
+    retryFailed?: boolean;
+  } = {},
+) {
   const maxAttempts = options.maxAttempts ?? 5;
   const staleMinutes = options.staleMinutes ?? 30;
   const staleBefore = new Date(Date.now() - staleMinutes * 60_000);
@@ -338,13 +340,15 @@ export async function processNextPendingAlbum(
   return processQueuedAlbum(claim.albumId, claimOwnerId, claim.trackIds);
 }
 
-export async function runMatchQueueWorker(options: {
-  maxAlbums?: number;
-  maxAttempts?: number;
-  recover?: boolean;
-  retryFailed?: boolean;
-  staleMinutes?: number;
-} = {}): Promise<QueueWorkerResult> {
+export async function runMatchQueueWorker(
+  options: {
+    maxAlbums?: number;
+    maxAttempts?: number;
+    recover?: boolean;
+    retryFailed?: boolean;
+    staleMinutes?: number;
+  } = {},
+): Promise<QueueWorkerResult> {
   const maxAlbums = options.maxAlbums ?? 1;
   const maxAttempts = options.maxAttempts ?? 5;
   const prepared = options.recover
@@ -719,7 +723,6 @@ export async function processQueuedAlbum(
       }
       return result;
     }
-
   } catch (error) {
     const message = errorMessage(error, 'Failed to process album');
     const status = isRetryableProcessingError(message) ? 'pending' : 'failed';

@@ -174,12 +174,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
   let [part] = await db
     .select({ id: workPartV2.id })
     .from(workPartV2)
-    .where(
-      and(
-        eq(workPartV2.workId, workId),
-        eq(workPartV2.position, metadata.movementNumber),
-      ),
-    )
+    .where(and(eq(workPartV2.workId, workId), eq(workPartV2.position, metadata.movementNumber)))
     .limit(1);
   if (!part) {
     [part] = await db
@@ -197,7 +192,9 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     .select({ id: recordingV2.id })
     .from(recordingV2)
     .where(and(eq(recordingV2.spotifyAlbumId, album.id), eq(recordingV2.workId, workId)))
-    .orderBy(sql`(SELECT count(*) FROM recording_track_v2 WHERE recording_id = ${recordingV2.id}) DESC`)
+    .orderBy(
+      sql`(SELECT count(*) FROM recording_track_v2 WHERE recording_id = ${recordingV2.id}) DESC`,
+    )
     .limit(1);
   if (!recordingRow) {
     [recordingRow] = await db

@@ -69,69 +69,66 @@ export async function getMatchedTracks(trackIds: string[]): Promise<MatchedTrack
   if (trackIds.length === 0) return [];
 
   const rows = await db
-      .select({
-        trackId: recordingTrackV2.spotifyTrackId,
-        recordingId: recordingV2.id,
-        discNumber: spotifyTrack.discNumber,
-        trackNumber: spotifyTrack.trackNumber,
-        partId: workPartV2.id,
-        partPosition: workPartV2.position,
-        partLabel: workPartV2.label,
-        partTitle: workPartV2.title,
-        matchStatus: trackWorkPartV2.matchStatus,
-        workId: work.id,
-        workTitle: work.title,
-        catalogSystem: workCatalogV2.system,
-        catalogNumber: workCatalogV2.number,
-        nickname: work.nickname,
-        composerName: composer.name,
-      })
-      .from(recordingTrackV2)
-      .innerJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
-      .innerJoin(recordingV2, eq(recordingTrackV2.recordingId, recordingV2.id))
-      .innerJoin(work, eq(recordingV2.workId, work.id))
-      .innerJoin(composer, eq(work.composerId, composer.id))
-      .innerJoin(
-        trackWorkPartV2,
-        eq(recordingTrackV2.spotifyTrackId, trackWorkPartV2.spotifyTrackId),
-      )
-      .innerJoin(workPartV2, eq(trackWorkPartV2.workPartId, workPartV2.id))
-      .leftJoin(
-        workCatalogV2,
-        and(eq(workCatalogV2.workId, work.id), eq(workCatalogV2.isPrimary, true)),
-      )
-      .where(inArray(recordingTrackV2.spotifyTrackId, trackIds));
+    .select({
+      trackId: recordingTrackV2.spotifyTrackId,
+      recordingId: recordingV2.id,
+      discNumber: spotifyTrack.discNumber,
+      trackNumber: spotifyTrack.trackNumber,
+      partId: workPartV2.id,
+      partPosition: workPartV2.position,
+      partLabel: workPartV2.label,
+      partTitle: workPartV2.title,
+      matchStatus: trackWorkPartV2.matchStatus,
+      workId: work.id,
+      workTitle: work.title,
+      catalogSystem: workCatalogV2.system,
+      catalogNumber: workCatalogV2.number,
+      nickname: work.nickname,
+      composerName: composer.name,
+    })
+    .from(recordingTrackV2)
+    .innerJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
+    .innerJoin(recordingV2, eq(recordingTrackV2.recordingId, recordingV2.id))
+    .innerJoin(work, eq(recordingV2.workId, work.id))
+    .innerJoin(composer, eq(work.composerId, composer.id))
+    .innerJoin(trackWorkPartV2, eq(recordingTrackV2.spotifyTrackId, trackWorkPartV2.spotifyTrackId))
+    .innerJoin(workPartV2, eq(trackWorkPartV2.workPartId, workPartV2.id))
+    .leftJoin(
+      workCatalogV2,
+      and(eq(workCatalogV2.workId, work.id), eq(workCatalogV2.isPrimary, true)),
+    )
+    .where(inArray(recordingTrackV2.spotifyTrackId, trackIds));
 
-    const byTrack = new Map<string, MatchedTrack>();
-    for (const row of rows) {
-      const existing = byTrack.get(row.trackId);
-      const part = {
-        id: row.partId,
-        position: row.partPosition,
-        label: row.partLabel,
-        title: row.partTitle,
-        matchStatus: row.matchStatus,
-      };
-      if (existing) existing.parts.push(part);
-      else {
-        byTrack.set(row.trackId, {
-          trackId: row.trackId,
-          recordingId: row.recordingId,
-          discNumber: row.discNumber,
-          trackNumber: row.trackNumber,
-          parts: [part],
-          work: {
-            id: row.workId,
-            title: row.workTitle,
-            catalogSystem: row.catalogSystem,
-            catalogNumber: row.catalogNumber,
-            nickname: row.nickname,
-            composerName: row.composerName,
-          },
-        });
-      }
+  const byTrack = new Map<string, MatchedTrack>();
+  for (const row of rows) {
+    const existing = byTrack.get(row.trackId);
+    const part = {
+      id: row.partId,
+      position: row.partPosition,
+      label: row.partLabel,
+      title: row.partTitle,
+      matchStatus: row.matchStatus,
+    };
+    if (existing) existing.parts.push(part);
+    else {
+      byTrack.set(row.trackId, {
+        trackId: row.trackId,
+        recordingId: row.recordingId,
+        discNumber: row.discNumber,
+        trackNumber: row.trackNumber,
+        parts: [part],
+        work: {
+          id: row.workId,
+          title: row.workTitle,
+          catalogSystem: row.catalogSystem,
+          catalogNumber: row.catalogNumber,
+          nickname: row.nickname,
+          composerName: row.composerName,
+        },
+      });
     }
-    for (const item of byTrack.values()) item.parts.sort((a, b) => a.position - b.position);
+  }
+  for (const item of byTrack.values()) item.parts.sort((a, b) => a.position - b.position);
   return [...byTrack.values()];
 }
 

@@ -16,14 +16,8 @@ import {
   normalizeMetadataText,
 } from '@/lib/classical-normalization';
 import type { ClassicalMetadataV2 } from '@/lib/classical-parser';
-import {
-  collapseCartesianPartAssignments,
-  selectRecordingMatch,
-} from '@/lib/recording-matching';
-import {
-  candidateIsSpecificEnough,
-  titlesAreCompatible,
-} from '@/lib/metadata-matching';
+import { collapseCartesianPartAssignments, selectRecordingMatch } from '@/lib/recording-matching';
+import { candidateIsSpecificEnough, titlesAreCompatible } from '@/lib/metadata-matching';
 
 export type V2TrackInput = {
   id: string;
@@ -249,18 +243,13 @@ async function resolveWorkPart(
 
   const occupant = existing.find((part) => part.position === candidate.position);
   const occupantHasMatchingLabel =
-    occupant &&
-    normalizedLabel &&
-    normalizeMetadataText(occupant.label) === normalizedLabel;
+    occupant && normalizedLabel && normalizeMetadataText(occupant.label) === normalizedLabel;
   const occupantHasCompatibleTitle =
     occupant &&
     normalizedTitle &&
     normalizeMetadataText(occupant.title) &&
     titlesAreCompatible(occupant.title ?? '', candidate.title ?? '');
-  if (
-    occupant &&
-    (occupantHasMatchingLabel || occupantHasCompatibleTitle)
-  ) {
+  if (occupant && (occupantHasMatchingLabel || occupantHasCompatibleTitle)) {
     return preserveCanonicalPosition(occupant);
   }
 
@@ -332,7 +321,12 @@ export async function saveParsedAlbumV2(
           })
           .from(recordingTrackV2)
           .innerJoin(recordingV2, eq(recordingTrackV2.recordingId, recordingV2.id))
-          .where(inArray(recordingTrackV2.spotifyTrackId, tracks.map((track) => track.id)))
+          .where(
+            inArray(
+              recordingTrackV2.spotifyTrackId,
+              tracks.map((track) => track.id),
+            ),
+          )
       : [];
   const currentWorkByTrackId = new Map(
     currentAssignments.map((assignment) => [assignment.spotifyTrackId, assignment.workId]),
@@ -347,7 +341,12 @@ export async function saveParsedAlbumV2(
           })
           .from(trackWorkPartV2)
           .innerJoin(workPartV2, eq(trackWorkPartV2.workPartId, workPartV2.id))
-          .where(inArray(trackWorkPartV2.spotifyTrackId, tracks.map((track) => track.id)))
+          .where(
+            inArray(
+              trackWorkPartV2.spotifyTrackId,
+              tracks.map((track) => track.id),
+            ),
+          )
       : [];
   const currentPartsByTrackId = new Map<string, Array<{ id: number; position: number }>>();
   for (const assignment of currentPartAssignments) {

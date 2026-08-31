@@ -194,10 +194,7 @@ export async function updateWorkDetails(
     throw new Error('Work not found');
   }
 
-  if (
-    data.catalogSystem !== undefined &&
-    data.catalogNumber !== undefined
-  ) {
+  if (data.catalogSystem !== undefined && data.catalogNumber !== undefined) {
     await db.delete(workCatalogV2).where(eq(workCatalogV2.workId, workId));
     if (data.catalogSystem && data.catalogNumber) {
       await db.insert(workCatalogV2).values({

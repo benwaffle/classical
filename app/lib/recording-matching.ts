@@ -23,7 +23,11 @@ export function selectRecordingMatch(
 type ParsedPart = { position: number; label: string | null; title: string | null };
 
 function partSignature(part: ParsedPart) {
-  return [part.position, part.label?.trim().toLowerCase() ?? '', part.title?.trim().toLowerCase() ?? ''].join(':');
+  return [
+    part.position,
+    part.label?.trim().toLowerCase() ?? '',
+    part.title?.trim().toLowerCase() ?? '',
+  ].join(':');
 }
 
 /**

@@ -97,9 +97,7 @@ async function spotifyFetch<T>(path: string): Promise<T> {
     if (response.status === 429) {
       const retryAfterSeconds = Number(response.headers.get('retry-after') ?? 5);
       if (retryAfterSeconds > 60) {
-        throw new Error(
-          `Spotify rate limit retry after ${retryAfterSeconds} seconds for ${path}`,
-        );
+        throw new Error(`Spotify rate limit retry after ${retryAfterSeconds} seconds for ${path}`);
       }
       const retryAfterMs = Math.max(1, retryAfterSeconds) * 1_000;
       spotifyBlockedUntil = Math.max(spotifyBlockedUntil, Date.now() + retryAfterMs);

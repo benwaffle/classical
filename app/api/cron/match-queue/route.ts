@@ -6,9 +6,7 @@ export const maxDuration = 300;
 
 function isAuthorized(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
-  return Boolean(
-    cronSecret && request.headers.get('authorization') === `Bearer ${cronSecret}`,
-  );
+  return Boolean(cronSecret && request.headers.get('authorization') === `Bearer ${cronSecret}`);
 }
 
 async function processAndDispatchNext(requestUrl: string) {

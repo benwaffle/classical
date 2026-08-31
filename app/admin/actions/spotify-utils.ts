@@ -106,9 +106,9 @@ export async function loadTrackDbContext(spotifyTrackIds: string[]) {
 
   const trackMovementRecords = (
     await db
-    .select()
-    .from(trackWorkPartV2)
-    .where(inArray(trackWorkPartV2.spotifyTrackId, spotifyTrackIds))
+      .select()
+      .from(trackWorkPartV2)
+      .where(inArray(trackWorkPartV2.spotifyTrackId, spotifyTrackIds))
   ).map((row) => ({ ...row, movementId: row.workPartId }));
 
   if (trackMovementRecords.length === 0) {

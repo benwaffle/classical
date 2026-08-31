@@ -92,9 +92,7 @@ export async function deleteTrackMetadata(spotifyTrackId: string) {
 
   try {
     await db.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, spotifyTrackId));
-    await db
-      .delete(recordingTrackV2)
-      .where(eq(recordingTrackV2.spotifyTrackId, spotifyTrackId));
+    await db.delete(recordingTrackV2).where(eq(recordingTrackV2.spotifyTrackId, spotifyTrackId));
 
     return {
       success: true,
