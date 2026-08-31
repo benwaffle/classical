@@ -71,3 +71,4 @@ Use `turso db shell spotify-classical "<query>"` to execute SQL queries
 - Take a backup of the DB before mutating prod data or schema.
 - Short downtime is OK, I'm the only user.
 - We're doing CI/CD, so prod deploys are done by landing commits on main
+- copy .envrc from ~/dev/classical
