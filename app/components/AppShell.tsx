@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { usePathname } from 'next/navigation';
 import { authClient } from '@/lib/auth-client';
 import { SpotifyPlayerProvider } from '@/lib/spotify-player-context';
 import { LibraryProvider } from '@/lib/library-context';
@@ -24,20 +25,40 @@ export function useNavSearch(): NavSearch {
 }
 
 interface AppShellProps {
-  current: 'library' | 'catalogue';
-  searchPlaceholder?: string;
   children: ReactNode;
+}
+
+/** Which tab the navbar highlights, and what its search box is searching. */
+function sectionFor(pathname: string): {
+  current: 'library' | 'catalogue';
+  placeholder: string;
+} {
+  return pathname.startsWith('/catalog')
+    ? { current: 'catalogue', placeholder: 'Composer, work, catalogue no.…' }
+    : { current: 'library', placeholder: 'Search your library…' };
 }
 
 /**
  * Session, playback and the persistent chrome — navbar above, player bar
- * below — wrapped around whichever screen is showing.
+ * below — wrapped around whichever screen is showing. This lives in the
+ * listening layout, so it survives navigation and playback keeps going.
  */
-export function AppShell({ current, searchPlaceholder, children }: AppShellProps) {
+export function AppShell({ children }: AppShellProps) {
+  const pathname = usePathname();
+  const { current, placeholder } = sectionFor(pathname);
   const { data: session, isPending } = authClient.useSession();
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+
+  // A library search means nothing on the catalogue and vice versa, so the box
+  // empties when you cross between them. Moving within a section — library to a
+  // work and back — keeps whatever you typed.
+  const [searchedSection, setSearchedSection] = useState(current);
+  if (searchedSection !== current) {
+    setSearchedSection(current);
+    setQuery('');
+  }
 
   useEffect(() => {
     if (!session) return;
@@ -102,7 +123,7 @@ export function AppShell({ current, searchPlaceholder, children }: AppShellProps
             current={current}
             query={query}
             setQuery={setQuery}
-            placeholder={searchPlaceholder}
+            placeholder={placeholder}
           />
           <div className="relative z-[1] min-h-screen">{children}</div>
           <PlayerBar />
