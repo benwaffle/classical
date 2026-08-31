@@ -15,6 +15,7 @@ import {
   trackArtists,
 } from '@/lib/db/schema';
 import { and, eq, inArray, desc, asc, sql } from 'drizzle-orm';
+import { mappedTrackCount } from '@/lib/db/expressions';
 import {
   type Era,
   catalogLabel,
@@ -32,14 +33,6 @@ import {
 
 /** libSQL takes bound parameters one at a time; keep each IN list modest. */
 const CHUNK = 400;
-
-const mappedTrackCount = sql<number>`(
-  select count(distinct ${trackWorkPartV2.spotifyTrackId})
-  from ${recordingTrackV2}
-  join ${trackWorkPartV2}
-    on ${trackWorkPartV2.spotifyTrackId} = ${recordingTrackV2.spotifyTrackId}
-  where ${recordingTrackV2.recordingId} = ${recordingV2.id}
-)`;
 
 function chunked<T>(items: T[], size = CHUNK): T[][] {
   const out: T[][] = [];

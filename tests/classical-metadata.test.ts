@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { QueryBuilder } from 'drizzle-orm/sqlite-core';
+import { mappedTrackCount } from '../app/lib/db/expressions';
+import { recordingV2 } from '../app/lib/db/schema';
 import {
   formatWorkPart,
   normalizeCatalogNumber,
@@ -116,4 +119,23 @@ test('uses normalized catalogue candidates without guessing across duplicates', 
 
 test('isolates liked-song caches by authenticated user', () => {
   assert.notEqual(likedSongsDatabaseName('user-a'), likedSongsDatabaseName('user-b'));
+});
+
+test('the mapped-track count keeps its identifiers qualified in a single-table select', () => {
+  /*
+   * Drizzle strips table names from `sql` template columns selected over a
+   * single table. That once collapsed this subquery's join to
+   * `spotify_track_id = spotify_track_id`, which SQLite rejects as ambiguous
+   * and which took down every work detail page.
+   */
+  const { sql: rendered } = new QueryBuilder()
+    .select({ id: recordingV2.id, mapped: mappedTrackCount })
+    .from(recordingV2)
+    .toSQL();
+
+  assert.match(
+    rendered,
+    /on "track_work_part_v2"\."spotify_track_id" = "recording_track_v2"\."spotify_track_id"/,
+  );
+  assert.match(rendered, /where "recording_track_v2"\."recording_id" = "recording_v2"\."id"/);
 });
