@@ -1,20 +1,59 @@
-import { runMatchQueueWorker } from '@/lib/match-queue-processor';
+import { after } from 'next/server';
+import { prepareMatchQueue, runMatchQueueWorker } from '@/lib/match-queue-processor';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
-export async function GET(request: Request) {
+function isAuthorized(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || request.headers.get('authorization') !== `Bearer ${cronSecret}`) {
+  return Boolean(
+    cronSecret && request.headers.get('authorization') === `Bearer ${cronSecret}`,
+  );
+}
+
+async function processAndDispatchNext(requestUrl: string) {
+  const result = await runMatchQueueWorker({ maxAlbums: 1 });
+  const retryableFailure = result.albums.some((album) =>
+    album.errors.some((error) => error.retryable),
+  );
+  if (result.albums.length === 0 || retryableFailure) return;
+
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) return;
+  await fetch(requestUrl, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${cronSecret}` },
+    cache: 'no-store',
+  });
+}
+
+function scheduleWorker(request: Request) {
+  after(async () => {
+    try {
+      await processAndDispatchNext(request.url);
+    } catch (error) {
+      console.error('Match-queue worker failed:', error);
+    }
+  });
+}
+
+export async function POST(request: Request) {
+  if (!isAuthorized(request)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  scheduleWorker(request);
+  return Response.json({ scheduled: true }, { status: 202 });
+}
 
-  const result = await runMatchQueueWorker({
-    maxAlbums: 3,
-    recover: true,
+export async function GET(request: Request) {
+  if (!isAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const prepared = await prepareMatchQueue({
+    maxAttempts: 5,
     retryFailed: true,
     staleMinutes: 30,
   });
-
-  return Response.json(result);
+  scheduleWorker(request);
+  return Response.json({ scheduled: true, ...prepared }, { status: 202 });
 }

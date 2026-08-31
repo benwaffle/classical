@@ -20,7 +20,10 @@ import {
   collapseCartesianPartAssignments,
   selectRecordingMatch,
 } from '@/lib/recording-matching';
-import { upsertWork } from '@/app/admin/actions/spotify-utils';
+import {
+  candidateIsSpecificEnough,
+  titlesAreCompatible,
+} from '@/lib/metadata-matching';
 
 export type V2TrackInput = {
   id: string;
@@ -63,20 +66,6 @@ export async function ensureWorkCatalogV2(
     .onConflictDoNothing();
 }
 
-async function createWorkFromParsedMetadata(composerId: number, metadata: ClassicalMetadataV2) {
-  const workId = await upsertWork({
-    composerId,
-    title: metadata.formalName.trim(),
-    nickname: metadata.nickname,
-    catalogSystem: metadata.catalogSystem,
-    catalogNumber: metadata.catalogNumber,
-    yearComposed: metadata.yearComposed,
-    form: metadata.form,
-  });
-  await ensureWorkCatalogV2(workId, metadata.catalogSystem, metadata.catalogNumber);
-  return workId;
-}
-
 async function resolveComposerId(name: string | null) {
   if (!name) return null;
   const normalizedName = normalizeMetadataText(name.split('(')[0]);
@@ -100,29 +89,6 @@ async function resolveComposerId(name: string | null) {
   return partial.length === 1 ? partial[0].id : null;
 }
 
-function titlesAreCompatible(left: string, right: string) {
-  const normalizedLeft = normalizeMetadataText(left);
-  const normalizedRight = normalizeMetadataText(right);
-  if (!normalizedLeft || !normalizedRight) return false;
-  if (
-    normalizedLeft === normalizedRight ||
-    normalizedLeft.includes(normalizedRight) ||
-    normalizedRight.includes(normalizedLeft)
-  ) {
-    return true;
-  }
-  const leftTokens = new Set(normalizedLeft.split(' ').filter((token) => token.length > 1));
-  const rightTokens = new Set(normalizedRight.split(' ').filter((token) => token.length > 1));
-  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  return intersection / Math.max(leftTokens.size, rightTokens.size) >= 0.6;
-}
-
-function isLessSpecificThanPreferred(candidateTitle: string, preferredTitle: string) {
-  const candidateTokens = normalizeMetadataText(candidateTitle).split(' ').filter(Boolean);
-  const preferredTokens = normalizeMetadataText(preferredTitle).split(' ').filter(Boolean);
-  return candidateTokens.length <= preferredTokens.length;
-}
-
 export async function resolveWorkV2(
   metadata: ClassicalMetadataV2,
   preferredWorkId?: number | null,
@@ -139,7 +105,8 @@ export async function resolveWorkV2(
     : [];
   const compatiblePreferredWork =
     preferredWork?.composerId === composerId &&
-    titlesAreCompatible(preferredWork.title, metadata.formalName)
+    titlesAreCompatible(preferredWork.title, metadata.formalName) &&
+    candidateIsSpecificEnough(metadata.formalName, preferredWork.title)
       ? preferredWork
       : null;
 
@@ -188,7 +155,6 @@ export async function resolveWorkV2(
       (candidate) => normalizeMetadataText(candidate.title) === title,
     );
     if (exact.length === 1) return exact[0].id;
-    if (canonicalCandidates.length === 1) return canonicalCandidates[0].id;
     if (compatiblePreferredWork) {
       const preferredAudit = await db
         .select({ targetId: metadataMigrationAudit.targetId })
@@ -210,15 +176,6 @@ export async function resolveWorkV2(
         return canonicalPreferredId;
       }
     }
-    if (canonicalCandidates.length === 0) {
-      if (
-        preferredWork &&
-        isLessSpecificThanPreferred(metadata.formalName, preferredWork.title)
-      ) {
-        return null;
-      }
-      return createWorkFromParsedMetadata(composerId, metadata);
-    }
     return null;
   }
 
@@ -230,10 +187,7 @@ export async function resolveWorkV2(
   const exact = candidates.filter((candidate) => normalizeMetadataText(candidate.title) === title);
   if (exact.length === 1) return exact[0].id;
   if (compatiblePreferredWork) return compatiblePreferredWork.id;
-  if (preferredWork && isLessSpecificThanPreferred(metadata.formalName, preferredWork.title)) {
-    return null;
-  }
-  return createWorkFromParsedMetadata(composerId, metadata);
+  return null;
 }
 
 async function resolveWorkPart(
@@ -250,20 +204,30 @@ async function resolveWorkPart(
   const normalizedTitle = normalizeMetadataText(candidate.title);
   const normalizedLabel = normalizeMetadataText(candidate.label);
   const preserveCanonicalPosition = async (part: (typeof existing)[number]) => {
-    if (candidate.label || candidate.title) {
+    if ((!part.label && candidate.label) || (!part.title && candidate.title)) {
       await db
         .update(workPartV2)
-        .set({ label: candidate.label ?? part.label, title: candidate.title })
+        .set({ label: part.label ?? candidate.label, title: part.title ?? candidate.title })
         .where(eq(workPartV2.id, part.id));
     }
     return { id: part.id, status: 'confirmed' as const };
   };
-  const exact = existing.filter(
-    (part) =>
-      normalizeMetadataText(part.title) === normalizedTitle &&
-      normalizeMetadataText(part.label) === normalizedLabel,
-  );
+  const exact =
+    normalizedTitle || normalizedLabel
+      ? existing.filter(
+          (part) =>
+            normalizeMetadataText(part.title) === normalizedTitle &&
+            normalizeMetadataText(part.label) === normalizedLabel,
+        )
+      : [];
   if (exact.length === 1) return preserveCanonicalPosition(exact[0]);
+
+  // A complete printed label identifies the canonical leaf. Spotify often
+  // supplies shorter or longer title variants for that same movement.
+  const labelMatches = normalizedLabel
+    ? existing.filter((part) => normalizeMetadataText(part.label) === normalizedLabel)
+    : [];
+  if (labelMatches.length === 1) return preserveCanonicalPosition(labelMatches[0]);
 
   const titleMatches = normalizedTitle
     ? existing.filter((part) => normalizeMetadataText(part.title) === normalizedTitle)
@@ -273,12 +237,14 @@ async function resolveWorkPart(
   const preferredPart = preferredPartId
     ? existing.find((part) => part.id === preferredPartId)
     : undefined;
-  if (preferredPart) {
-    await db
-      .update(workPartV2)
-      .set({ label: candidate.label, title: candidate.title })
-      .where(eq(workPartV2.id, preferredPart.id));
-    return { id: preferredPart.id, status: 'confirmed' as const };
+  if (
+    preferredPart &&
+    ((normalizedLabel && normalizeMetadataText(preferredPart.label) === normalizedLabel) ||
+      (normalizedTitle &&
+        preferredPart.title &&
+        titlesAreCompatible(preferredPart.title, candidate.title ?? '')))
+  ) {
+    return preserveCanonicalPosition(preferredPart);
   }
 
   const occupant = existing.find((part) => part.position === candidate.position);
@@ -286,20 +252,16 @@ async function resolveWorkPart(
     occupant &&
     normalizedLabel &&
     normalizeMetadataText(occupant.label) === normalizedLabel;
+  const occupantHasCompatibleTitle =
+    occupant &&
+    normalizedTitle &&
+    normalizeMetadataText(occupant.title) &&
+    titlesAreCompatible(occupant.title ?? '', candidate.title ?? '');
   if (
     occupant &&
-    (occupantHasMatchingLabel ||
-      !normalizedTitle ||
-      !normalizeMetadataText(occupant.title) ||
-      normalizeMetadataText(occupant.title) === normalizedTitle)
+    (occupantHasMatchingLabel || occupantHasCompatibleTitle)
   ) {
-    if (!occupantHasMatchingLabel) {
-      await db
-        .update(workPartV2)
-        .set({ label: candidate.label, title: candidate.title })
-        .where(eq(workPartV2.id, occupant.id));
-    }
-    return { id: occupant.id, status: 'confirmed' as const };
+    return preserveCanonicalPosition(occupant);
   }
 
   const usedPositions = new Set(existing.map((part) => part.position));

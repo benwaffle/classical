@@ -101,6 +101,9 @@ const MAX_TRACKS_PER_PARSE = 20;
 const RATE_LIMIT_BACKOFF_MS = [15_000, 30_000, 60_000, 60_000];
 const PARSER_MODEL = process.env.CLASSICAL_PARSER_MODEL ?? 'openai/gpt-5-mini';
 
+const CLASSICAL_CLASSIFICATION_RULES = `Set isClassical true only for Western art-music works and their arrangements.
+Film, television, and video-game scores or soundtrack cues are not classical merely because they use an orchestra; set isClassical false for them. In particular, Hans Zimmer soundtrack music is not classical for this catalog.`;
+
 const WORK_PART_PARSING_RULES = `A work part is a canonical leaf unit. A Spotify track may contain one leaf, several leaves, or part of one leaf.
 
 For every part, separate its printed identifier from all descriptive text:
@@ -171,7 +174,9 @@ async function parseIndexedTracks(
 
 ${trackList}
 
-Return one object for every input track. Copy each track's numeric prefix into inputIndex. Tracks from the same work should have consistent catalog numbers and formal names. Use the album and track context to disambiguate sparse track titles like "I. Allegro" or "Andante".`;
+Return one object for every input track. Copy each track's numeric prefix into inputIndex. Tracks from the same work should have consistent catalog numbers and formal names. Use the album and track context to disambiguate sparse track titles like "I. Allegro" or "Andante".
+
+${CLASSICAL_CLASSIFICATION_RULES}`;
 
   if (process.env.CLASSICAL_PARSER_DEBUG === '1') {
     console.log('AI Album Batch Prompt:', prompt);
@@ -272,7 +277,7 @@ export async function parseAlbumTracksV2(
       try {
         const result = await generateText({
           model: PARSER_MODEL,
-          prompt: `Parse the requested tracks from the album "${albumName}". The complete album outline is provided so recording groups stay stable across batches:\n\n${albumOutline}\n\nReturn objects only for these requested inputs:\n${trackList}\n\n${WORK_PART_PARSING_RULES}\n\nEvery classical track must have a non-empty recordingGroup. Use exactly the same descriptive recordingGroup text anywhere the same performance appears in the album, including across requested batches; base it on work and performers rather than the batch number. Separate performances of the same work require different groups. For a primary composer with a completion or arrangement credit, put only the primary composer in composerName. formalName must identify the complete work represented by the track, not an album collection, excerpt heading, or movement. Copy inputIndex exactly.`,
+          prompt: `Parse the requested tracks from the album "${albumName}". The complete album outline is provided so recording groups stay stable across batches:\n\n${albumOutline}\n\nReturn objects only for these requested inputs:\n${trackList}\n\n${CLASSICAL_CLASSIFICATION_RULES}\n\n${WORK_PART_PARSING_RULES}\n\nEvery classical track must have a non-empty recordingGroup. Use exactly the same descriptive recordingGroup text anywhere the same performance appears in the album, including across requested batches; base it on work and performers rather than the batch number. Separate performances of the same work require different groups. For a primary composer with a completion or arrangement credit, put only the primary composer in composerName. formalName must identify the complete work represented by the track, not an album collection, excerpt heading, or movement. Copy inputIndex exactly.`,
           output: Output.object({ schema: albumBatchV2Schema }),
         });
         output = result.output;

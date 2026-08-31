@@ -17,7 +17,7 @@ import {
 import { headers } from 'next/headers';
 import { after } from 'next/server';
 import { and, inArray, eq, sql } from 'drizzle-orm';
-import { enqueueAlbumsForTracks, runMatchQueueWorker } from '@/lib/match-queue-processor';
+import { enqueueAlbumsForTracks } from '@/lib/match-queue-processor';
 
 export async function getSpotifyToken(): Promise<string> {
   const session = await auth.api.getSession({
@@ -161,14 +161,22 @@ export async function submitToMatchQueue(trackIds: string[]): Promise<{
   }
 
   const enqueueResult = await enqueueAlbumsForTracks(trackIds, session.user.id);
-  const processingScheduled = enqueueResult.submitted > 0 ? 1 : 0;
+  const requestHeaders = await headers();
+  const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
+  const protocol = requestHeaders.get('x-forwarded-proto') ?? 'https';
+  const cronSecret = process.env.CRON_SECRET;
+  const processingScheduled = enqueueResult.submitted > 0 && host && cronSecret ? 1 : 0;
 
   if (processingScheduled) {
     after(async () => {
       try {
-        await runMatchQueueWorker({ maxAlbums: 1 });
+        await fetch(`${protocol}://${host}/api/cron/match-queue`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${cronSecret}` },
+          cache: 'no-store',
+        });
       } catch (error) {
-        console.error('Background match-queue processing failed:', error);
+        console.error('Failed to dispatch match-queue processing:', error);
       }
     });
   }
@@ -177,7 +185,7 @@ export async function submitToMatchQueue(trackIds: string[]): Promise<{
     submitted: enqueueResult.submitted,
     expanded: enqueueResult.expanded,
     alreadyQueued: enqueueResult.alreadyQueued,
-    processingScheduled,
+    processingScheduled: Number(processingScheduled),
     queuedTrackIds: enqueueResult.queuedTrackIds,
   };
 }
