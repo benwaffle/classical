@@ -1,88 +1,12 @@
 'use client';
 
-import { authClient } from '@/lib/auth-client';
-import { LikedSongs } from './components/LikedSongs';
-import { SpotifyPlayer } from './components/SpotifyPlayer';
-import { SpotifyPlayerProvider } from '@/lib/spotify-player-context';
-import { useEffect, useState } from 'react';
-import { getSpotifyToken } from './actions/spotify';
+import { AppShell } from './components/AppShell';
+import { LibraryScreen } from './components/library/LibraryScreen';
 
-// Refresh the token every 50 minutes (Spotify tokens expire after 60 minutes)
-const TOKEN_REFRESH_INTERVAL_MS = 50 * 60 * 1000;
-
-export default function Home() {
-  const { data: session } = authClient.useSession();
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!session) return;
-
-    let cancelled = false;
-
-    const refresh = () => {
-      getSpotifyToken()
-        .then((token) => {
-          if (!cancelled) setAccessToken(token);
-        })
-        .catch((err) => console.error('Error fetching token:', err));
-    };
-
-    refresh();
-    const interval = setInterval(refresh, TOKEN_REFRESH_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [session]);
-
-  const handleSignIn = async () => {
-    await authClient.signIn.social({
-      provider: 'spotify',
-      callbackURL: '/',
-    });
-  };
-
-  const handleSignOut = async () => {
-    await authClient.signOut();
-  };
-
+export default function LibraryPage() {
   return (
-    <div className="flex min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full flex-col items-center gap-8 py-6 px-4 sm:px-8">
-        <div className="w-full flex items-center justify-between">
-          <h1 className="text-4xl font-bold text-black dark:text-zinc-50">prelude.fm</h1>
-          {session && (
-            <button
-              onClick={handleSignOut}
-              className="flex h-10 items-center justify-center rounded-full bg-black px-6 text-sm text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200 cursor-pointer"
-            >
-              Sign Out
-            </button>
-          )}
-        </div>
-
-        {session ? (
-          accessToken ? (
-            <SpotifyPlayerProvider accessToken={accessToken}>
-              <LikedSongs accessToken={accessToken} />
-              <SpotifyPlayer />
-            </SpotifyPlayerProvider>
-          ) : (
-            <div className="flex items-center justify-center py-12">
-              <p className="text-zinc-600 dark:text-zinc-400">Loading...</p>
-            </div>
-          )
-        ) : (
-          <div className="flex flex-col items-center gap-6 py-32">
-            <button
-              onClick={handleSignIn}
-              className="flex h-12 items-center justify-center gap-2 rounded-full bg-[#1DB954] px-8 text-white transition-colors hover:bg-[#1ed760] cursor-pointer"
-            >
-              Sign in with Spotify
-            </button>
-          </div>
-        )}
-      </main>
-    </div>
+    <AppShell current="library" searchPlaceholder="Search your library…">
+      <LibraryScreen />
+    </AppShell>
   );
 }

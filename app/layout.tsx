@@ -1,31 +1,20 @@
 import type { Metadata } from 'next';
-import localFont from 'next/font/local';
+import { Cormorant_Garamond, Inter } from 'next/font/google';
 import './globals.css';
 
-const mackinac = localFont({
-  src: [
-    {
-      path: './fonts/mackinac-medium.woff2',
-      weight: '400',
-      style: 'normal',
-    },
-    {
-      path: './fonts/mackinac-medium-italic.woff2',
-      weight: '400',
-      style: 'italic',
-    },
-    {
-      path: './fonts/mackinac-bold.woff2',
-      weight: '700',
-      style: 'normal',
-    },
-    {
-      path: './fonts/mackinac-bold-italic.woff2',
-      weight: '700',
-      style: 'italic',
-    },
-  ],
-  variable: '--font-mackinac',
+// The editorial type pairing from the design: a Garamond for display, Inter
+// for body and metadata.
+const cormorant = Cormorant_Garamond({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  style: ['normal', 'italic'],
+  variable: '--font-cormorant',
+});
+
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-inter',
 });
 
 export const metadata: Metadata = {
@@ -39,12 +28,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${mackinac.variable} font-sans antialiased min-h-screen bg-zinc-50 dark:bg-black`}
-      >
-        {children}
-      </body>
+    <html lang="en" data-density="compact">
+      <body className={`${cormorant.variable} ${inter.variable} antialiased`}>{children}</body>
     </html>
   );
 }
