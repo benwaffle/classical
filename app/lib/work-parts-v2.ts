@@ -1,5 +1,5 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { db } from '@/lib/db';
+import { db, type DatabaseExecutor } from '@/lib/db';
 import {
   composer,
   recordingTrackV2,
@@ -25,9 +25,19 @@ export type V2TrackInput = {
   trackNumber: number;
 };
 
+export type SaveParsedAlbumResult = {
+  groups: number;
+  confirmed: number;
+  needsReview: number;
+  unresolved: number;
+};
+
 let composerRowsPromise: Promise<Array<{ id: number; name: string }>> | null = null;
 
-async function getComposerRows() {
+async function getComposerRows(database: DatabaseExecutor) {
+  if (database !== db) {
+    return database.select({ id: composer.id, name: composer.name }).from(composer);
+  }
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       composerRowsPromise ??= db.select({ id: composer.id, name: composer.name }).from(composer);
@@ -45,9 +55,10 @@ export async function ensureWorkCatalogV2(
   workId: number,
   system: string | null,
   number: string | null,
+  database: DatabaseExecutor = db,
 ) {
   if (!system || !number) return;
-  await db
+  await database
     .insert(workCatalogV2)
     .values({
       workId,
@@ -60,10 +71,14 @@ export async function ensureWorkCatalogV2(
     .onConflictDoNothing();
 }
 
-async function resolveComposerId(name: string | null) {
+async function resolveComposerId(
+  name: string | null,
+  database: DatabaseExecutor,
+  availableComposers?: Array<{ id: number; name: string }>,
+) {
   if (!name) return null;
   const normalizedName = normalizeMetadataText(name.split('(')[0]);
-  const rows = await getComposerRows();
+  const rows = availableComposers ?? (await getComposerRows(database));
   const exact = rows.filter((row) => normalizeMetadataText(row.name) === normalizedName);
   if (exact.length === 1) return exact[0].id;
 
@@ -86,12 +101,14 @@ async function resolveComposerId(name: string | null) {
 export async function resolveWorkV2(
   metadata: ClassicalMetadataV2,
   preferredWorkId?: number | null,
+  database: DatabaseExecutor = db,
+  availableComposers?: Array<{ id: number; name: string }>,
 ) {
-  const composerId = await resolveComposerId(metadata.composerName);
+  const composerId = await resolveComposerId(metadata.composerName, database, availableComposers);
   if (!composerId) return null;
 
   const [preferredWork] = preferredWorkId
-    ? await db
+    ? await database
         .select({ id: work.id, composerId: work.composerId, title: work.title })
         .from(work)
         .where(eq(work.id, preferredWorkId))
@@ -105,7 +122,7 @@ export async function resolveWorkV2(
       : null;
 
   if (metadata.catalogSystem && metadata.catalogNumber) {
-    const candidates = await db
+    const candidates = await database
       .select({ id: work.id, title: work.title })
       .from(workCatalogV2)
       .innerJoin(work, eq(workCatalogV2.workId, work.id))
@@ -118,7 +135,7 @@ export async function resolveWorkV2(
       );
     const audits =
       candidates.length > 0
-        ? await db
+        ? await database
             .select({
               sourceId: metadataMigrationAudit.sourceId,
               targetId: metadataMigrationAudit.targetId,
@@ -150,7 +167,7 @@ export async function resolveWorkV2(
     );
     if (exact.length === 1) return exact[0].id;
     if (compatiblePreferredWork) {
-      const preferredAudit = await db
+      const preferredAudit = await database
         .select({ targetId: metadataMigrationAudit.targetId })
         .from(metadataMigrationAudit)
         .where(
@@ -173,7 +190,7 @@ export async function resolveWorkV2(
     return null;
   }
 
-  const candidates = await db
+  const candidates = await database
     .select({ id: work.id, title: work.title })
     .from(work)
     .where(eq(work.composerId, composerId));
@@ -188,18 +205,19 @@ async function resolveWorkPart(
   workId: number,
   candidate: ClassicalMetadataV2['parts'][number],
   preferredPartId?: number,
+  database: DatabaseExecutor = db,
 ) {
   candidate = {
     ...candidate,
     label: candidate.label?.trim() || null,
     title: candidate.title?.trim() || null,
   };
-  const existing = await db.select().from(workPartV2).where(eq(workPartV2.workId, workId));
+  const existing = await database.select().from(workPartV2).where(eq(workPartV2.workId, workId));
   const normalizedTitle = normalizeMetadataText(candidate.title);
   const normalizedLabel = normalizeMetadataText(candidate.label);
   const preserveCanonicalPosition = async (part: (typeof existing)[number]) => {
     if ((!part.label && candidate.label) || (!part.title && candidate.title)) {
-      await db
+      await database
         .update(workPartV2)
         .set({ label: part.label ?? candidate.label, title: part.title ?? candidate.title })
         .where(eq(workPartV2.id, part.id));
@@ -261,7 +279,7 @@ async function resolveWorkPart(
     while (usedPositions.has(position)) position += 1;
     status = 'needs_review';
   }
-  const [created] = await db
+  const [created] = await database
     .insert(workPartV2)
     .values({
       workId,
@@ -273,14 +291,19 @@ async function resolveWorkPart(
   return { id: created.id, status };
 }
 
-async function reconcileRecording(spotifyAlbumId: string, workId: number, trackIds: string[]) {
-  const candidates = await db
+async function reconcileRecording(
+  spotifyAlbumId: string,
+  workId: number,
+  trackIds: string[],
+  database: DatabaseExecutor,
+) {
+  const candidates = await database
     .select({ id: recordingV2.id })
     .from(recordingV2)
     .where(and(eq(recordingV2.spotifyAlbumId, spotifyAlbumId), eq(recordingV2.workId, workId)));
   const memberships: Array<{ id: number; trackIds: string[] }> = [];
   for (const candidate of candidates) {
-    const members = await db
+    const members = await database
       .select({ id: recordingTrackV2.spotifyTrackId })
       .from(recordingTrackV2)
       .where(eq(recordingTrackV2.recordingId, candidate.id));
@@ -288,16 +311,18 @@ async function reconcileRecording(spotifyAlbumId: string, workId: number, trackI
   }
   let recordingId = selectRecordingMatch(trackIds, memberships);
   if (!recordingId) {
-    const [created] = await db
+    const [created] = await database
       .insert(recordingV2)
       .values({ spotifyAlbumId, workId, popularity: null })
       .returning({ id: recordingV2.id });
     recordingId = created.id;
   }
-  await db.delete(recordingTrackV2).where(eq(recordingTrackV2.recordingId, recordingId));
+  await database.delete(recordingTrackV2).where(eq(recordingTrackV2.recordingId, recordingId));
   if (trackIds.length > 0) {
-    await db.delete(recordingTrackV2).where(inArray(recordingTrackV2.spotifyTrackId, trackIds));
-    await db.insert(recordingTrackV2).values(
+    await database
+      .delete(recordingTrackV2)
+      .where(inArray(recordingTrackV2.spotifyTrackId, trackIds));
+    await database.insert(recordingTrackV2).values(
       trackIds.map((spotifyTrackId) => ({
         recordingId: recordingId!,
         spotifyTrackId,
@@ -311,10 +336,16 @@ export async function saveParsedAlbumV2(
   spotifyAlbumId: string,
   tracks: V2TrackInput[],
   parsed: ClassicalMetadataV2[],
-) {
+  database?: DatabaseExecutor,
+): Promise<SaveParsedAlbumResult> {
+  if (!database) {
+    return db.transaction((transaction) =>
+      saveParsedAlbumV2(spotifyAlbumId, tracks, parsed, transaction),
+    );
+  }
   const currentAssignments =
     tracks.length > 0
-      ? await db
+      ? await database
           .select({
             spotifyTrackId: recordingTrackV2.spotifyTrackId,
             workId: recordingV2.workId,
@@ -333,7 +364,7 @@ export async function saveParsedAlbumV2(
   );
   const currentPartAssignments =
     tracks.length > 0
-      ? await db
+      ? await database
           .select({
             spotifyTrackId: trackWorkPartV2.spotifyTrackId,
             partId: workPartV2.id,
@@ -362,13 +393,21 @@ export async function saveParsedAlbumV2(
     metadata: ClassicalMetadataV2;
     workId: number | null;
   }> = [];
+  const availableComposers = await database
+    .select({ id: composer.id, name: composer.name })
+    .from(composer);
   for (let index = 0; index < tracks.length; index++) {
     const track = tracks[index];
     resolved.push({
       track,
       metadata: parsed[index],
       workId: parsed[index]?.isClassical
-        ? await resolveWorkV2(parsed[index], currentWorkByTrackId.get(track.id))
+        ? await resolveWorkV2(
+            parsed[index],
+            currentWorkByTrackId.get(track.id),
+            database,
+            availableComposers,
+          )
         : null,
     });
   }
@@ -425,10 +464,11 @@ export async function saveParsedAlbumV2(
       spotifyAlbumId,
       workId,
       ordered.map((item) => item.track.id),
+      database,
     );
     for (const item of ordered) {
       if (item.metadata.parts.length === 0) {
-        await db
+        await database
           .update(trackWorkPartV2)
           .set({ matchStatus: 'needs_review' })
           .where(eq(trackWorkPartV2.spotifyTrackId, item.track.id));
@@ -445,6 +485,7 @@ export async function saveParsedAlbumV2(
           preferredParts.length === item.metadata.parts.length
             ? preferredParts[partIndex]?.id
             : undefined,
+          database,
         );
         links.set(resolvedPart.id, {
           spotifyTrackId: item.track.id,
@@ -457,8 +498,10 @@ export async function saveParsedAlbumV2(
         if (resolvedPart.status === 'confirmed') confirmed++;
         else needsReview++;
       }
-      await db.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, item.track.id));
-      await db.insert(trackWorkPartV2).values([...links.values()]);
+      await database
+        .delete(trackWorkPartV2)
+        .where(eq(trackWorkPartV2.spotifyTrackId, item.track.id));
+      await database.insert(trackWorkPartV2).values([...links.values()]);
     }
   }
   return {

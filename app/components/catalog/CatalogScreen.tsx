@@ -341,6 +341,7 @@ function WorkPane({
         </div>
       </div>
 
+      {works.length === 0 && <PaneEmpty>No works are recorded for this composer yet.</PaneEmpty>}
       {byGenre.map(([genre, group]) => (
         <Fragment key={genre ?? '\u0000unrecorded'}>
           <div
@@ -477,6 +478,9 @@ function RecordingPane({
       </div>
 
       <div className="pt-1 pb-10">
+        {recordings.length === 0 && (
+          <PaneEmpty>No recordings are recorded for this work yet.</PaneEmpty>
+        )}
         {recordings.map((r) => (
           <Link
             key={r.id}
@@ -514,6 +518,11 @@ function RecordingPane({
                   Earliest
                 </span>
               )}
+              {r.unmatched && (
+                <span className="mb-[3px] block font-meta text-[8px] tracking-[0.2em] text-accent uppercase">
+                  tracks not mapped
+                </span>
+              )}
               <span className="block truncate font-display text-[18px] leading-[1.15] font-medium">
                 {r.performer}
               </span>
@@ -533,7 +542,9 @@ function RecordingPane({
                   {r.year}
                 </span>
               )}
-              <span className="font-meta text-[10.5px] text-muted tabular-nums">{r.duration}</span>
+              <span className="font-meta text-[10.5px] text-muted tabular-nums">
+                {r.duration ?? '—'}
+              </span>
               {r.liked > 0 && (
                 <span className="inline-flex items-center gap-1 font-meta text-[9.5px] tracking-[0.1em] text-accent">
                   <Icon name="heartFill" size={9} />

@@ -34,6 +34,14 @@ import {
 /** libSQL takes bound parameters one at a time; keep each IN list modest. */
 const CHUNK = 400;
 
+const mappedTrackCount = sql<number>`(
+  select count(distinct ${trackWorkPartV2.spotifyTrackId})
+  from ${recordingTrackV2}
+  join ${trackWorkPartV2}
+    on ${trackWorkPartV2.spotifyTrackId} = ${recordingTrackV2.spotifyTrackId}
+  where ${recordingTrackV2.recordingId} = ${recordingV2.id}
+)`;
+
 function chunked<T>(items: T[], size = CHUNK): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -96,12 +104,12 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
     albumId: string;
     albumTitle: string;
     albumImages: { url: string; width: number; height: number }[] | null;
-    trackId: string;
-    trackTitle: string;
-    discNumber: number;
-    trackNumber: number;
-    durationMs: number;
-    partPosition: number;
+    trackId: string | null;
+    trackTitle: string | null;
+    discNumber: number | null;
+    trackNumber: number | null;
+    durationMs: number | null;
+    partPosition: number | null;
     partLabel: string | null;
     partTitle: string | null;
   }[] = [];
@@ -140,10 +148,10 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
       // Left, because 60 composers have no linked Spotify artist to portray.
       .leftJoin(spotifyArtist, eq(spotifyArtist.spotifyId, composer.spotifyArtistId))
       .innerJoin(spotifyAlbum, eq(recordingV2.spotifyAlbumId, spotifyAlbum.spotifyId))
-      .innerJoin(recordingTrackV2, eq(recordingTrackV2.recordingId, recordingV2.id))
-      .innerJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
-      .innerJoin(trackWorkPartV2, eq(trackWorkPartV2.spotifyTrackId, spotifyTrack.spotifyId))
-      .innerJoin(workPartV2, eq(trackWorkPartV2.workPartId, workPartV2.id))
+      .leftJoin(recordingTrackV2, eq(recordingTrackV2.recordingId, recordingV2.id))
+      .leftJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
+      .leftJoin(trackWorkPartV2, eq(trackWorkPartV2.spotifyTrackId, spotifyTrack.spotifyId))
+      .leftJoin(workPartV2, eq(trackWorkPartV2.workPartId, workPartV2.id))
       .leftJoin(
         workCatalogV2,
         and(eq(workCatalogV2.workId, work.id), eq(workCatalogV2.isPrimary, true)),
@@ -153,7 +161,9 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
   }
   if (rows.length === 0) return [];
 
-  const performers = await performersFor(rows.map((r) => r.trackId));
+  const performers = await performersFor(
+    rows.map((r) => r.trackId).filter((trackId): trackId is string => trackId !== null),
+  );
   const allParts = await partsForWorks(rows.map((r) => r.workId));
 
   // A track can carry more than one movement, so collapse part rows per track.
@@ -164,9 +174,11 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
       entry = { head: row, tracks: new Map() };
       byRecording.set(row.recordingId, entry);
     }
-    const parts = entry.tracks.get(row.trackId);
-    if (parts) parts.push(row);
-    else entry.tracks.set(row.trackId, [row]);
+    if (row.trackId !== null) {
+      const parts = entry.tracks.get(row.trackId);
+      if (parts) parts.push(row);
+      else entry.tracks.set(row.trackId, [row]);
+    }
   }
 
   const works: LibraryWork[] = [];
@@ -174,24 +186,33 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
     const trackRows = Array.from(tracks.values()).sort((a, b) => {
       const x = a[0];
       const y = b[0];
-      return x.discNumber - y.discNumber || x.trackNumber - y.trackNumber;
+      return (
+        (x.discNumber ?? Number.MAX_SAFE_INTEGER) - (y.discNumber ?? Number.MAX_SAFE_INTEGER) ||
+        (x.trackNumber ?? Number.MAX_SAFE_INTEGER) - (y.trackNumber ?? Number.MAX_SAFE_INTEGER)
+      );
     });
 
-    const present: Movement[] = trackRows.map((parts) => {
-      const sorted = [...parts].sort((a, b) => a.partPosition - b.partPosition);
-      const { numeral, name, unnamed } = labelMovement(sorted, sorted[0].trackTitle);
+    const present: Movement[] = trackRows.map((parts, trackIndex) => {
+      const mapped = parts
+        .filter((part): part is Row & { partPosition: number } => part.partPosition !== null)
+        .sort((a, b) => a.partPosition - b.partPosition);
+      const head = parts[0];
+      const { numeral, name, unnamed } =
+        mapped.length > 0
+          ? labelMovement(mapped, head.trackTitle ?? '')
+          : { numeral: '', name: head.trackTitle ?? 'Metadata missing', unnamed: true };
       return {
         n: 0,
-        position: sorted[0].partPosition,
+        position: mapped[0]?.partPosition ?? trackIndex + 1,
         roman: numeral,
         name,
         unnamed,
         missing: false,
-        durationMs: sorted[0].durationMs,
-        duration: formatDuration(sorted[0].durationMs),
-        liked: liked.has(sorted[0].trackId),
-        trackId: sorted[0].trackId,
-        uri: `spotify:track:${sorted[0].trackId}`,
+        durationMs: head.durationMs,
+        duration: head.durationMs === null ? null : formatDuration(head.durationMs),
+        liked: head.trackId !== null && liked.has(head.trackId),
+        trackId: head.trackId,
+        uri: head.trackId === null ? null : `spotify:track:${head.trackId}`,
       };
     });
 
@@ -202,9 +223,12 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
      * work.
      */
     const covered = new Set<number>();
-    for (const parts of trackRows) for (const p of parts) covered.add(p.partPosition);
+    for (const parts of trackRows) {
+      for (const part of parts) if (part.partPosition !== null) covered.add(part.partPosition);
+    }
 
-    const gaps: Movement[] = (allParts.get(head.workId) ?? [])
+    const showCanonicalGaps = trackRows.length === 0 || covered.size > 0;
+    const gaps: Movement[] = (showCanonicalGaps ? (allParts.get(head.workId) ?? []) : [])
       .filter((part) => !covered.has(part.position))
       .map((part) => {
         const { numeral, name } = labelMovement(
@@ -217,8 +241,8 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
           n: 0,
           position: part.position,
           roman: numeral,
-          name: name || `Part ${part.position}`,
-          unnamed: false,
+          name: name || 'Metadata missing',
+          unnamed: !name,
           missing: true,
           durationMs: null,
           duration: null,
@@ -233,7 +257,7 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
       .map((m, index) => ({ ...m, n: index + 1 }));
 
     const credited = creditsFor(
-      trackRows.map((parts) => parts[0].trackId),
+      trackRows.flatMap((parts) => (parts[0].trackId === null ? [] : [parts[0].trackId])),
       performers,
       head.composerArtistId,
     );
@@ -260,6 +284,7 @@ async function buildWorks(recordingIds: number[], liked: Set<string>): Promise<L
       tint,
       ink,
       movements,
+      unmatched: covered.size === 0,
       // Only the client knows when a track was saved; the library context fills this in.
       addedAt: null,
     });
@@ -402,8 +427,9 @@ export interface OtherRecording {
   year: number | null;
   performer: string | null;
   ensemble: string | null;
-  durationMs: number;
-  duration: string;
+  durationMs: number | null;
+  duration: string | null;
+  unmatched: boolean;
   popularity: number | null;
   tint: string;
 }
@@ -444,10 +470,14 @@ export async function getWorkDetail(
   likedTrackIds: string[] = [],
 ): Promise<WorkDetail | null> {
   const recordings = await db
-    .select({ id: recordingV2.id, popularity: recordingV2.popularity })
+    .select({
+      id: recordingV2.id,
+      popularity: recordingV2.popularity,
+      mappedTracks: mappedTrackCount,
+    })
     .from(recordingV2)
     .where(eq(recordingV2.workId, workId))
-    .orderBy(desc(recordingV2.popularity));
+    .orderBy(desc(mappedTrackCount), desc(recordingV2.popularity));
   if (recordings.length === 0) return null;
 
   const requested =
@@ -488,16 +518,19 @@ async function recordingSummaries(recordingIds: number[]): Promise<OtherRecordin
       trackId: spotifyTrack.spotifyId,
       durationMs: spotifyTrack.durationMs,
       composerArtistId: composer.spotifyArtistId,
+      mappedTrackCount,
     })
     .from(recordingV2)
     .innerJoin(spotifyAlbum, eq(recordingV2.spotifyAlbumId, spotifyAlbum.spotifyId))
-    .innerJoin(recordingTrackV2, eq(recordingTrackV2.recordingId, recordingV2.id))
-    .innerJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
+    .leftJoin(recordingTrackV2, eq(recordingTrackV2.recordingId, recordingV2.id))
+    .leftJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
     .innerJoin(work, eq(recordingV2.workId, work.id))
     .innerJoin(composer, eq(work.composerId, composer.id))
     .where(inArray(recordingV2.id, recordingIds.slice(0, CHUNK)));
 
-  const performers = await performersFor(rows.map((r) => r.trackId));
+  const performers = await performersFor(
+    rows.map((r) => r.trackId).filter((trackId): trackId is string => trackId !== null),
+  );
 
   const byRecording = new Map<number, typeof rows>();
   for (const row of rows) {
@@ -513,7 +546,7 @@ async function recordingSummaries(recordingIds: number[]): Promise<OtherRecordin
     const seen = new Set<string>();
     let durationMs = 0;
     for (const row of list) {
-      if (seen.has(row.trackId)) continue;
+      if (row.trackId === null || row.durationMs === null || seen.has(row.trackId)) continue;
       seen.add(row.trackId);
       durationMs += row.durationMs;
     }
@@ -526,8 +559,9 @@ async function recordingSummaries(recordingIds: number[]): Promise<OtherRecordin
       year: head.albumYear,
       performer: credited.performer,
       ensemble: credited.ensemble,
-      durationMs,
-      duration: formatDuration(durationMs),
+      durationMs: seen.size > 0 ? durationMs : null,
+      duration: seen.size > 0 ? formatDuration(durationMs) : null,
+      unmatched: Number(head.mappedTrackCount) === 0,
       popularity: head.popularity,
       tint: tintFor(head.albumId).tint,
     });
@@ -547,13 +581,6 @@ async function worksByComposer(composerId: number, excludeWorkId: number): Promi
    * landing on a recording with no mapped tracks used to drop the work from
    * this list entirely.
    */
-  const mappedTracks = sql<number>`(
-    select count(*) from ${recordingTrackV2}
-    join ${trackWorkPartV2}
-      on ${trackWorkPartV2.spotifyTrackId} = ${recordingTrackV2.spotifyTrackId}
-    where ${recordingTrackV2.recordingId} = ${recordingV2.id}
-  )`;
-
   const works = await db
     .select({
       workId: work.id,
@@ -564,7 +591,7 @@ async function worksByComposer(composerId: number, excludeWorkId: number): Promi
       catalogNumber: workCatalogV2.number,
       recordingId: recordingV2.id,
       popularity: recordingV2.popularity,
-      mappedTracks,
+      mappedTracks: mappedTrackCount,
     })
     .from(work)
     .innerJoin(recordingV2, eq(recordingV2.workId, work.id))
@@ -573,7 +600,7 @@ async function worksByComposer(composerId: number, excludeWorkId: number): Promi
       and(eq(workCatalogV2.workId, work.id), eq(workCatalogV2.isPrimary, true)),
     )
     .where(eq(work.composerId, composerId))
-    .orderBy(desc(mappedTracks), desc(recordingV2.popularity));
+    .orderBy(desc(mappedTrackCount), desc(recordingV2.popularity));
 
   /*
    * Choosing the fullest recording to represent a work is a choice between two
@@ -671,12 +698,14 @@ export interface CatalogRecording {
   year: number | null;
   performer: string | null;
   ensemble: string | null;
-  duration: string;
+  duration: string | null;
   popularity: number | null;
   tint: string;
   /** How many movements of this recording the user has saved. */
   liked: number;
   firstTrackUri: string | null;
+  /** This recording has no tracks mapped to canonical work parts. */
+  unmatched: boolean;
 }
 
 /** Column one: every composer we hold, with what we hold of them. */
@@ -692,8 +721,8 @@ export async function getCatalogComposers(): Promise<CatalogComposer[]> {
       recordingCount: sql<number>`count(distinct ${recordingV2.id})`,
     })
     .from(composer)
-    .innerJoin(work, eq(work.composerId, composer.id))
-    .innerJoin(recordingV2, eq(recordingV2.workId, work.id))
+    .leftJoin(work, eq(work.composerId, composer.id))
+    .leftJoin(recordingV2, eq(recordingV2.workId, work.id))
     // Left, because 60 composers have no linked Spotify artist to portray.
     .leftJoin(spotifyArtist, eq(spotifyArtist.spotifyId, composer.spotifyArtistId))
     .groupBy(composer.id)
@@ -731,7 +760,7 @@ export async function getCatalogWorks(composerId: number): Promise<CatalogWork[]
       recordingCount: sql<number>`count(distinct ${recordingV2.id})`,
     })
     .from(work)
-    .innerJoin(recordingV2, eq(recordingV2.workId, work.id))
+    .leftJoin(recordingV2, eq(recordingV2.workId, work.id))
     .leftJoin(workPartV2, eq(workPartV2.workId, work.id))
     .leftJoin(
       workCatalogV2,
@@ -776,16 +805,19 @@ export async function getCatalogRecordings(
       trackNumber: spotifyTrack.trackNumber,
       durationMs: spotifyTrack.durationMs,
       composerArtistId: composer.spotifyArtistId,
+      mappedTrackCount,
     })
     .from(recordingV2)
     .innerJoin(spotifyAlbum, eq(recordingV2.spotifyAlbumId, spotifyAlbum.spotifyId))
-    .innerJoin(recordingTrackV2, eq(recordingTrackV2.recordingId, recordingV2.id))
-    .innerJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
+    .leftJoin(recordingTrackV2, eq(recordingTrackV2.recordingId, recordingV2.id))
+    .leftJoin(spotifyTrack, eq(recordingTrackV2.spotifyTrackId, spotifyTrack.spotifyId))
     .innerJoin(work, eq(recordingV2.workId, work.id))
     .innerJoin(composer, eq(work.composerId, composer.id))
     .where(eq(recordingV2.workId, workId));
 
-  const performers = await performersFor(rows.map((r) => r.trackId));
+  const performers = await performersFor(
+    rows.map((r) => r.trackId).filter((trackId): trackId is string => trackId !== null),
+  );
   const liked = new Set(likedTrackIds);
 
   const byRecording = new Map<number, typeof rows>();
@@ -799,16 +831,19 @@ export async function getCatalogRecordings(
   for (const [recordingId, list] of byRecording) {
     const head = list[0];
     const tracks = new Map<string, (typeof rows)[number]>();
-    for (const row of list) if (!tracks.has(row.trackId)) tracks.set(row.trackId, row);
+    for (const row of list) {
+      if (row.trackId !== null && !tracks.has(row.trackId)) tracks.set(row.trackId, row);
+    }
     const ordered = Array.from(tracks.values()).sort(
-      (a, b) => a.discNumber - b.discNumber || a.trackNumber - b.trackNumber,
+      (a, b) =>
+        (a.discNumber ?? Number.MAX_SAFE_INTEGER) - (b.discNumber ?? Number.MAX_SAFE_INTEGER) ||
+        (a.trackNumber ?? Number.MAX_SAFE_INTEGER) - (b.trackNumber ?? Number.MAX_SAFE_INTEGER),
     );
-    const durationMs = ordered.reduce((sum, t) => sum + t.durationMs, 0);
-    const credited = creditsFor(
-      ordered.map((t) => t.trackId),
-      performers,
-      head.composerArtistId,
+    const durationMs = ordered.reduce((sum, t) => sum + (t.durationMs ?? 0), 0);
+    const orderedTrackIds = ordered.flatMap((track) =>
+      track.trackId === null ? [] : [track.trackId],
     );
+    const credited = creditsFor(orderedTrackIds, performers, head.composerArtistId);
     out.push({
       id: recordingId,
       album: head.album,
@@ -817,11 +852,12 @@ export async function getCatalogRecordings(
       year: head.albumYear,
       performer: credited.performer,
       ensemble: credited.ensemble,
-      duration: formatDuration(durationMs),
+      duration: ordered.length > 0 ? formatDuration(durationMs) : null,
       popularity: head.popularity,
       tint: tintFor(head.albumId).tint,
-      liked: ordered.filter((t) => liked.has(t.trackId)).length,
+      liked: orderedTrackIds.filter((trackId) => liked.has(trackId)).length,
       firstTrackUri: ordered[0] ? `spotify:track:${ordered[0].trackId}` : null,
+      unmatched: Number(head.mappedTrackCount) === 0,
     });
   }
 

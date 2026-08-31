@@ -16,63 +16,60 @@ export async function createComposerWithSpotify(data: {
 }): Promise<ComposerRow> {
   await checkAuth();
 
-  const [existingBySpotify] = await db
-    .select()
-    .from(composer)
-    .where(eq(composer.spotifyArtistId, data.spotifyArtistId))
-    .limit(1);
+  return db.transaction(async (transaction) => {
+    const [existingBySpotify] = await transaction
+      .select()
+      .from(composer)
+      .where(eq(composer.spotifyArtistId, data.spotifyArtistId))
+      .limit(1);
+    if (existingBySpotify) return existingBySpotify;
 
-  if (existingBySpotify) {
-    return existingBySpotify;
-  }
-
-  await db
-    .insert(spotifyArtist)
-    .values({
-      spotifyId: data.spotifyArtistId,
-      name: data.name,
-      popularity: data.popularity ?? null,
-      images: data.images ?? null,
-    })
-    .onConflictDoUpdate({
-      target: spotifyArtist.spotifyId,
-      set: {
+    await transaction
+      .insert(spotifyArtist)
+      .values({
+        spotifyId: data.spotifyArtistId,
         name: data.name,
         popularity: data.popularity ?? null,
         images: data.images ?? null,
-      },
-    });
-
-  const [existingByName] = await db
-    .select()
-    .from(composer)
-    .where(eq(composer.name, data.name))
-    .limit(1);
-
-  if (existingByName) {
-    const [updated] = await db
-      .update(composer)
-      .set({
-        spotifyArtistId: data.spotifyArtistId,
-        birthYear: data.birthYear ?? existingByName.birthYear,
-        deathYear: data.deathYear ?? existingByName.deathYear,
       })
-      .where(eq(composer.id, existingByName.id))
+      .onConflictDoUpdate({
+        target: spotifyArtist.spotifyId,
+        set: {
+          name: data.name,
+          popularity: data.popularity ?? null,
+          images: data.images ?? null,
+        },
+      });
+
+    const [existingByName] = await transaction
+      .select()
+      .from(composer)
+      .where(eq(composer.name, data.name))
+      .limit(1);
+    if (existingByName) {
+      const [updated] = await transaction
+        .update(composer)
+        .set({
+          spotifyArtistId: data.spotifyArtistId,
+          birthYear: data.birthYear ?? existingByName.birthYear,
+          deathYear: data.deathYear ?? existingByName.deathYear,
+        })
+        .where(eq(composer.id, existingByName.id))
+        .returning();
+      return updated;
+    }
+
+    const [result] = await transaction
+      .insert(composer)
+      .values({
+        name: data.name,
+        spotifyArtistId: data.spotifyArtistId,
+        birthYear: data.birthYear ?? null,
+        deathYear: data.deathYear ?? null,
+      })
       .returning();
-    return updated;
-  }
-
-  const [result] = await db
-    .insert(composer)
-    .values({
-      name: data.name,
-      spotifyArtistId: data.spotifyArtistId,
-      birthYear: data.birthYear ?? null,
-      deathYear: data.deathYear ?? null,
-    })
-    .returning();
-
-  return result;
+    return result;
+  });
 }
 
 export async function searchComposers(query: string): Promise<ComposerRow[]> {

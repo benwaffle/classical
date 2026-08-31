@@ -18,13 +18,13 @@ interface UseLikedSongsResult {
   refetch: () => Promise<void>;
 }
 
-export function useLikedSongs(accessToken: string): UseLikedSongsResult {
+export function useLikedSongs(accessToken: string, userId: string): UseLikedSongsResult {
   const [tracks, setTracks] = useState<SavedTrack[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
-  const hasFetched = useRef(false);
+  const fetchedFor = useRef<string | null>(null);
 
   const fetchFromApi = useCallback(
     async (showProgress = true) => {
@@ -50,10 +50,10 @@ export function useLikedSongs(accessToken: string): UseLikedSongsResult {
 
       setTracks(allTracks);
       setTotal(apiTotal);
-      await setCachedLikedSongs(allTracks);
+      await setCachedLikedSongs(userId, allTracks);
       return allTracks;
     },
-    [accessToken],
+    [accessToken, userId],
   );
 
   const fetch = useCallback(async () => {
@@ -62,7 +62,7 @@ export function useLikedSongs(accessToken: string): UseLikedSongsResult {
     let hasCachedTracks = false;
 
     try {
-      const cached = await getCachedLikedSongs();
+      const cached = await getCachedLikedSongs(userId);
       if (cached) {
         hasCachedTracks = cached.tracks.length > 0;
         setTracks(cached.tracks);
@@ -88,7 +88,7 @@ export function useLikedSongs(accessToken: string): UseLikedSongsResult {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchFromApi]);
+  }, [fetchFromApi, userId]);
 
   const refetch = useCallback(async () => {
     setRefreshing(true);
@@ -104,10 +104,10 @@ export function useLikedSongs(accessToken: string): UseLikedSongsResult {
   }, [fetchFromApi, tracks.length]);
 
   useEffect(() => {
-    if (hasFetched.current) return;
-    hasFetched.current = true;
+    if (fetchedFor.current === userId) return;
+    fetchedFor.current = userId;
     fetch();
-  }, [fetch]);
+  }, [fetch, userId]);
 
   return { tracks, loading, refreshing, error, total, refetch };
 }

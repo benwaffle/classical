@@ -9,8 +9,8 @@ import {
   type SpotifyArtistMetadata,
 } from '@/lib/spotify-app-client';
 import { parseAlbumTracksV2, type ClassicalMetadata } from '@/lib/classical-parser';
-import { saveTrackMetadataInternal } from '@/lib/track-metadata-save';
-import { ensureWorkCatalogV2, saveParsedAlbumV2 } from '@/lib/work-parts-v2';
+import { saveTrackMetadataInternal, type TrackMetadataSaveInput } from '@/lib/track-metadata-save';
+import { saveParsedAlbumV2 } from '@/lib/work-parts-v2';
 import { and, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Track } from '@spotify/web-api-ts-sdk';
 
@@ -439,16 +439,16 @@ async function getLinkedTrackIds(trackIds: string[]) {
   return new Set(linkedRows.map((row) => row.spotifyTrackId));
 }
 
-async function saveParsedTrack(
+async function prepareParsedTrackSave(
   album: Awaited<ReturnType<typeof getSpotifyAlbumTracks>>['album'],
   track: Track,
   metadata: ClassicalMetadata,
   movementNumber: number,
-) {
+): Promise<TrackMetadataSaveInput> {
   let composerName = metadata.composerName?.trim();
   const formalName = metadata.formalName.trim();
 
-  if (!metadata.isClassical) return { status: 'not_classical' as const };
+  if (!metadata.isClassical) throw new Error('Cannot save non-classical metadata');
   if (!composerName || !formalName) {
     throw new Error('Parsed metadata is missing composer or work title');
   }
@@ -502,7 +502,7 @@ async function saveParsedTrack(
     throw new Error(`Could not resolve Spotify artist for composer "${composerName}"`);
   }
 
-  const saved = await saveTrackMetadataInternal({
+  return {
     preserveExistingWork: true,
     album: {
       id: album.id,
@@ -543,9 +543,7 @@ async function saveParsedTrack(
       movementName: metadata.movementName || null,
       yearComposed: metadata.yearComposed || null,
     },
-  });
-
-  return { status: 'matched' as const, ...saved };
+  };
 }
 
 export async function processQueuedAlbum(
@@ -635,8 +633,12 @@ export async function processQueuedAlbum(
           trackNumber: track.track_number,
         })),
       );
-      const savedTrackIds = new Set<string>();
       const synthesizedPartTrackIds = new Set<string>();
+      const prepared: Array<{
+        track: Track;
+        metadata: (typeof parsedV2)[number];
+        input: TrackMetadataSaveInput;
+      }> = [];
       for (let index = 0; index < unknownTracks.length; index++) {
         const track = unknownTracks[index];
         const metadata = parsedV2[index];
@@ -663,11 +665,13 @@ export async function processQueuedAlbum(
           yearComposed: metadata.yearComposed,
         };
         try {
-          const saved = await saveParsedTrack(album, track, legacyMetadata, firstPart.position);
-          if (saved.status === 'matched') {
-            savedTrackIds.add(track.id);
-            await ensureWorkCatalogV2(saved.workId, metadata.catalogSystem, metadata.catalogNumber);
-          }
+          const input = await prepareParsedTrackSave(
+            album,
+            track,
+            legacyMetadata,
+            firstPart.position,
+          );
+          prepared.push({ track, metadata, input });
         } catch (error) {
           await setQueueStatus([track.id], 'failed', {
             claimOwnerId,
@@ -676,47 +680,45 @@ export async function processQueuedAlbum(
           result.failed++;
         }
       }
-      const eligibleTracks = unknownTracks.filter((track) => savedTrackIds.has(track.id));
-      const eligibleParsed = unknownTracks.flatMap((track, index) =>
-        savedTrackIds.has(track.id) ? [parsedV2[index]] : [],
-      );
-      const savedV2 = await saveParsedAlbumV2(
-        album.id,
-        eligibleTracks.map((track) => ({
-          id: track.id,
-          discNumber: track.disc_number,
-          trackNumber: track.track_number,
-        })),
-        eligibleParsed,
-      );
-      await db
-        .update(trackWorkPartV2)
-        .set({ matchStatus: 'needs_review' })
-        .where(
-          and(
-            inArray(
-              trackWorkPartV2.spotifyTrackId,
-              eligibleTracks.map((track) => track.id),
-            ),
-            eq(trackWorkPartV2.matchSource, 'manual'),
-          ),
-        );
-      if (synthesizedPartTrackIds.size > 0) {
-        await db
-          .update(trackWorkPartV2)
-          .set({ matchStatus: 'needs_review' })
-          .where(inArray(trackWorkPartV2.spotifyTrackId, [...synthesizedPartTrackIds]));
-      }
-      for (const track of eligibleTracks) {
-        const [link] = await db
-          .select({ id: trackWorkPartV2.spotifyTrackId })
-          .from(trackWorkPartV2)
-          .where(eq(trackWorkPartV2.spotifyTrackId, track.id))
-          .limit(1);
-        if (link) {
-          await setQueueStatus([track.id], 'matched', { claimOwnerId });
-          result.matched++;
+      const eligibleTracks = prepared.map((item) => item.track);
+      const eligibleTrackIds = eligibleTracks.map((track) => track.id);
+      const savedV2 = await db.transaction(async (transaction) => {
+        for (const item of prepared) {
+          await saveTrackMetadataInternal(item.input, transaction);
         }
+        const saved = await saveParsedAlbumV2(
+          album.id,
+          eligibleTracks.map((track) => ({
+            id: track.id,
+            discNumber: track.disc_number,
+            trackNumber: track.track_number,
+          })),
+          prepared.map((item) => item.metadata),
+          transaction,
+        );
+        if (eligibleTrackIds.length > 0) {
+          await transaction
+            .update(trackWorkPartV2)
+            .set({ matchStatus: 'needs_review' })
+            .where(
+              and(
+                inArray(trackWorkPartV2.spotifyTrackId, eligibleTrackIds),
+                eq(trackWorkPartV2.matchSource, 'manual'),
+              ),
+            );
+        }
+        if (synthesizedPartTrackIds.size > 0) {
+          await transaction
+            .update(trackWorkPartV2)
+            .set({ matchStatus: 'needs_review' })
+            .where(inArray(trackWorkPartV2.spotifyTrackId, [...synthesizedPartTrackIds]));
+        }
+        return saved;
+      });
+      const completedTrackIds = await getLinkedTrackIds(eligibleTrackIds);
+      if (completedTrackIds.size > 0) {
+        await setQueueStatus([...completedTrackIds], 'matched', { claimOwnerId });
+        result.matched += completedTrackIds.size;
       }
       if (savedV2.unresolved > 0) {
         result.errors.push({ message: `${savedV2.unresolved} v2 work assignments need review` });

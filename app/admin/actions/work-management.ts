@@ -10,9 +10,11 @@ import {
   workPartV2,
   workCatalogV2,
 } from '@/lib/db/schema';
-import { and, count, eq, like, or, sql } from 'drizzle-orm';
+import { and, count, eq, like, ne, or, sql } from 'drizzle-orm';
 import { checkAuth } from './auth';
 import type { ComposerRow, RecordingRow, WorkRow } from './schema-types';
+import { upsertWork } from './spotify-utils';
+import { ensureWorkCatalogV2 } from '@/lib/work-parts-v2';
 import { normalizeCatalogNumber, normalizeCatalogSystem } from '@/lib/classical-normalization';
 
 export type AdminWorkPart = {
@@ -139,32 +141,29 @@ export async function createWork(data: {
   form?: string | null;
 }): Promise<WorkRow> {
   await checkAuth();
-
-  const [result] = await db
-    .insert(work)
-    .values({
-      composerId: data.composerId,
-      title: data.title,
-      nickname: data.nickname ?? null,
-      catalogSystem: data.catalogSystem ?? null,
-      catalogNumber: data.catalogNumber ?? null,
-      yearComposed: data.yearComposed ?? null,
-      form: data.form ?? null,
-    })
-    .returning();
-
-  if (data.catalogSystem && data.catalogNumber) {
-    await db.insert(workCatalogV2).values({
-      workId: result.id,
-      system: data.catalogSystem,
-      number: data.catalogNumber,
-      normalizedSystem: normalizeCatalogSystem(data.catalogSystem),
-      normalizedNumber: normalizeCatalogNumber(data.catalogNumber),
-      isPrimary: true,
-    });
-  }
-
-  return result;
+  return db.transaction(async (transaction) => {
+    const workId = await upsertWork(
+      {
+        composerId: data.composerId,
+        title: data.title,
+        nickname: data.nickname ?? null,
+        catalogSystem: data.catalogSystem ?? null,
+        catalogNumber: data.catalogNumber ?? null,
+        yearComposed: data.yearComposed ?? null,
+        form: data.form ?? null,
+        preserveExisting: true,
+      },
+      transaction,
+    );
+    await ensureWorkCatalogV2(
+      workId,
+      data.catalogSystem ?? null,
+      data.catalogNumber ?? null,
+      transaction,
+    );
+    const [result] = await transaction.select().from(work).where(eq(work.id, workId)).limit(1);
+    return result;
+  });
 }
 
 export async function updateWorkDetails(
@@ -188,27 +187,40 @@ export async function updateWorkDetails(
   if (data.yearComposed !== undefined) updateData.yearComposed = data.yearComposed;
   if (data.form !== undefined) updateData.form = data.form;
 
-  const [result] = await db.update(work).set(updateData).where(eq(work.id, workId)).returning();
+  return db.transaction(async (transaction) => {
+    const [result] = await transaction
+      .update(work)
+      .set(updateData)
+      .where(eq(work.id, workId))
+      .returning();
+    if (!result) throw new Error('Work not found');
 
-  if (!result) {
-    throw new Error('Work not found');
-  }
-
-  if (data.catalogSystem !== undefined && data.catalogNumber !== undefined) {
-    await db.delete(workCatalogV2).where(eq(workCatalogV2.workId, workId));
-    if (data.catalogSystem && data.catalogNumber) {
-      await db.insert(workCatalogV2).values({
-        workId,
-        system: data.catalogSystem,
-        number: data.catalogNumber,
-        normalizedSystem: normalizeCatalogSystem(data.catalogSystem),
-        normalizedNumber: normalizeCatalogNumber(data.catalogNumber),
-        isPrimary: true,
-      });
+    if (data.catalogSystem !== undefined && data.catalogNumber !== undefined) {
+      if (data.catalogSystem && data.catalogNumber) {
+        const [conflict] = await transaction
+          .select({ id: work.id })
+          .from(workCatalogV2)
+          .innerJoin(work, eq(workCatalogV2.workId, work.id))
+          .where(
+            and(
+              eq(work.composerId, result.composerId),
+              ne(work.id, workId),
+              eq(workCatalogV2.normalizedSystem, normalizeCatalogSystem(data.catalogSystem)),
+              eq(workCatalogV2.normalizedNumber, normalizeCatalogNumber(data.catalogNumber)),
+            ),
+          )
+          .limit(1);
+        if (conflict) {
+          throw new Error(
+            `Another work already uses ${data.catalogSystem} ${data.catalogNumber} for this composer`,
+          );
+        }
+      }
+      await transaction.delete(workCatalogV2).where(eq(workCatalogV2.workId, workId));
+      await ensureWorkCatalogV2(workId, data.catalogSystem, data.catalogNumber, transaction);
     }
-  }
-
-  return result;
+    return result;
+  });
 }
 
 export async function addMovementToWork(

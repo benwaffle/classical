@@ -1,4 +1,4 @@
-import { db } from '@/lib/db';
+import { db, type DatabaseExecutor } from '@/lib/db';
 import {
   composer,
   recordingTrackV2,
@@ -51,10 +51,24 @@ export interface TrackMetadataSaveInput {
   };
 }
 
-export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
+export interface TrackMetadataSaveResult {
+  success: true;
+  workId: number;
+  movementId: number;
+  recordingId: number;
+  composerId: number;
+}
+
+export async function saveTrackMetadataInternal(
+  data: TrackMetadataSaveInput,
+  database?: DatabaseExecutor,
+): Promise<TrackMetadataSaveResult> {
+  if (!database) {
+    return db.transaction((transaction) => saveTrackMetadataInternal(data, transaction));
+  }
   const { album, track, artists, composerArtist, metadata } = data;
 
-  const albumPromise = db
+  const albumPromise = database
     .insert(spotifyAlbum)
     .values({
       spotifyId: album.id,
@@ -74,7 +88,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     });
 
   const artistPromises = artists.map((artist) =>
-    db
+    database
       .insert(spotifyArtist)
       .values({
         spotifyId: artist.id,
@@ -87,7 +101,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
 
   if (composerArtist && !artists.some((artist) => artist.id === composerArtist.id)) {
     artistPromises.push(
-      db
+      database
         .insert(spotifyArtist)
         .values({
           spotifyId: composerArtist.id,
@@ -104,7 +118,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
   let composerId = artists.find((a) => a.id === metadata.composerArtistId)?.composerId;
 
   if (!composerId) {
-    const [existing] = await db
+    const [existing] = await database
       .select()
       .from(composer)
       .where(eq(composer.spotifyArtistId, metadata.composerArtistId))
@@ -113,7 +127,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     if (existing) {
       composerId = existing.id;
     } else {
-      const result = await db
+      const result = await database
         .insert(composer)
         .values({
           name: metadata.composerName,
@@ -124,7 +138,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     }
   }
 
-  await db
+  await database
     .insert(spotifyTrack)
     .values({
       spotifyId: track.id,
@@ -149,7 +163,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
 
   await Promise.all(
     artists.map((artist) =>
-      db
+      database
         .insert(trackArtists)
         .values({
           spotifyTrackId: track.id,
@@ -159,25 +173,28 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     ),
   );
 
-  const workId = await upsertWork({
-    composerId,
-    title: metadata.formalName,
-    nickname: metadata.nickname,
-    catalogSystem: metadata.catalogSystem,
-    catalogNumber: metadata.catalogNumber,
-    yearComposed: metadata.yearComposed,
-    form: metadata.form,
-    preserveExisting: data.preserveExistingWork,
-  });
+  const workId = await upsertWork(
+    {
+      composerId,
+      title: metadata.formalName,
+      nickname: metadata.nickname,
+      catalogSystem: metadata.catalogSystem,
+      catalogNumber: metadata.catalogNumber,
+      yearComposed: metadata.yearComposed,
+      form: metadata.form,
+      preserveExisting: data.preserveExistingWork,
+    },
+    database,
+  );
 
-  await ensureWorkCatalogV2(workId, metadata.catalogSystem, metadata.catalogNumber);
-  let [part] = await db
+  await ensureWorkCatalogV2(workId, metadata.catalogSystem, metadata.catalogNumber, database);
+  let [part] = await database
     .select({ id: workPartV2.id })
     .from(workPartV2)
     .where(and(eq(workPartV2.workId, workId), eq(workPartV2.position, metadata.movementNumber)))
     .limit(1);
   if (!part) {
-    [part] = await db
+    [part] = await database
       .insert(workPartV2)
       .values({
         workId,
@@ -188,7 +205,7 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
       .returning({ id: workPartV2.id });
   }
 
-  let [recordingRow] = await db
+  let [recordingRow] = await database
     .select({ id: recordingV2.id })
     .from(recordingV2)
     .where(and(eq(recordingV2.spotifyAlbumId, album.id), eq(recordingV2.workId, workId)))
@@ -197,20 +214,20 @@ export async function saveTrackMetadataInternal(data: TrackMetadataSaveInput) {
     )
     .limit(1);
   if (!recordingRow) {
-    [recordingRow] = await db
+    [recordingRow] = await database
       .insert(recordingV2)
       .values({ spotifyAlbumId: album.id, workId, popularity: null })
       .returning({ id: recordingV2.id });
   }
-  await db
+  await database
     .insert(recordingTrackV2)
     .values({
       recordingId: recordingRow.id,
       spotifyTrackId: track.id,
     })
     .onConflictDoNothing();
-  await db.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, track.id));
-  await db.insert(trackWorkPartV2).values({
+  await database.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, track.id));
+  await database.insert(trackWorkPartV2).values({
     spotifyTrackId: track.id,
     workPartId: part.id,
     matchSource: 'manual',

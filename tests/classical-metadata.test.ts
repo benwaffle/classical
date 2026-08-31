@@ -10,6 +10,8 @@ import {
   collapseCartesianPartAssignments,
   selectRecordingMatch,
 } from '../app/lib/recording-matching';
+import { selectCanonicalWorkCandidate } from '../app/lib/work-matching';
+import { likedSongsDatabaseName } from '../app/lib/liked-songs-cache';
 
 test('normalizes catalog punctuation without changing display data', () => {
   assert.equal(normalizeCatalogSystem('K.'), normalizeCatalogSystem(' K '));
@@ -79,4 +81,25 @@ test('preserves genuine combined and asymmetric part assignments', () => {
   const second = [{ position: 3, label: 'III', title: 'Finale' }];
   assert.deepEqual(collapseCartesianPartAssignments([first]), [first]);
   assert.deepEqual(collapseCartesianPartAssignments([first, second]), [first, second]);
+});
+
+test('uses normalized catalogue candidates without guessing across duplicates', () => {
+  const base = {
+    composerId: 1,
+    nickname: null,
+    catalogSystem: 'Op',
+    catalogNumber: '71',
+    yearComposed: null,
+    form: null,
+  };
+  const candidates = [
+    { ...base, id: 10, title: 'The Nutcracker' },
+    { ...base, id: 11, title: 'The Nutcracker Suite' },
+  ];
+  assert.equal(selectCanonicalWorkCandidate(candidates, 'The Nutcracker')?.id, 10);
+  assert.equal(selectCanonicalWorkCandidate(candidates, 'Nutcracker excerpts'), null);
+});
+
+test('isolates liked-song caches by authenticated user', () => {
+  assert.notEqual(likedSongsDatabaseName('user-a'), likedSongsDatabaseName('user-b'));
 });

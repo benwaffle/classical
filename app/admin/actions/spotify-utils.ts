@@ -8,27 +8,33 @@ import type {
   WorkRow,
   RecordingRow,
 } from './schema-types';
-import { db } from '@/lib/db';
+import { db, type DatabaseExecutor } from '@/lib/db';
 import {
   composer,
   recordingTrackV2,
   recordingV2,
   trackWorkPartV2,
   work,
+  workCatalogV2,
   workPartV2,
 } from '@/lib/db/schema';
 import { and, eq, inArray } from 'drizzle-orm';
+import { normalizeCatalogNumber, normalizeCatalogSystem } from '@/lib/classical-normalization';
+import { selectCanonicalWorkCandidate } from '@/lib/work-matching';
 
-export async function upsertWork(data: {
-  composerId: number;
-  title: string;
-  nickname: string | null;
-  catalogSystem: string | null;
-  catalogNumber: string | null;
-  yearComposed: number | null;
-  form: string | null;
-  preserveExisting?: boolean;
-}) {
+export async function upsertWork(
+  data: {
+    composerId: number;
+    title: string;
+    nickname: string | null;
+    catalogSystem: string | null;
+    catalogNumber: string | null;
+    yearComposed: number | null;
+    form: string | null;
+    preserveExisting?: boolean;
+  },
+  database: DatabaseExecutor = db,
+) {
   const {
     composerId,
     title,
@@ -42,19 +48,42 @@ export async function upsertWork(data: {
   let existingWork: WorkRow | undefined;
 
   if (catalogSystem && catalogNumber) {
-    [existingWork] = await db
+    const candidates = await database
       .select()
-      .from(work)
+      .from(workCatalogV2)
+      .innerJoin(work, eq(workCatalogV2.workId, work.id))
       .where(
         and(
           eq(work.composerId, composerId),
-          eq(work.catalogSystem, catalogSystem),
-          eq(work.catalogNumber, catalogNumber),
+          eq(workCatalogV2.normalizedSystem, normalizeCatalogSystem(catalogSystem)),
+          eq(workCatalogV2.normalizedNumber, normalizeCatalogNumber(catalogNumber)),
         ),
-      )
-      .limit(1);
+      );
+    existingWork =
+      selectCanonicalWorkCandidate(
+        candidates.map((candidate) => candidate.work),
+        title,
+      ) ?? undefined;
+    if (!existingWork) {
+      if (candidates.length > 1) {
+        throw new Error(
+          `Ambiguous normalized catalog ${catalogSystem} ${catalogNumber} for composer ${composerId}`,
+        );
+      }
+      [existingWork] = await database
+        .select()
+        .from(work)
+        .where(
+          and(
+            eq(work.composerId, composerId),
+            eq(work.catalogSystem, catalogSystem),
+            eq(work.catalogNumber, catalogNumber),
+          ),
+        )
+        .limit(1);
+    }
   } else {
-    [existingWork] = await db
+    [existingWork] = await database
       .select()
       .from(work)
       .where(and(eq(work.composerId, composerId), eq(work.title, title)))
@@ -63,7 +92,7 @@ export async function upsertWork(data: {
 
   if (existingWork) {
     if (preserveExisting) return existingWork.id;
-    await db
+    await database
       .update(work)
       .set({
         title,
@@ -77,7 +106,7 @@ export async function upsertWork(data: {
     return existingWork.id;
   }
 
-  const [created] = await db
+  const [created] = await database
     .insert(work)
     .values({
       composerId,

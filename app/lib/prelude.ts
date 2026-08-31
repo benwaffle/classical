@@ -243,6 +243,8 @@ export interface LibraryWork {
   tint: string;
   ink: string;
   movements: Movement[];
+  /** No track in this recording has canonical work-part metadata yet. */
+  unmatched: boolean;
   /** When the user saved the most recent of these movements, ISO 8601. */
   addedAt: string | null;
 }

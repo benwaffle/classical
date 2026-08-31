@@ -48,6 +48,7 @@ export function AppShell({ children }: AppShellProps) {
   const { current, placeholder } = sectionFor(pathname);
   const { data: session, isPending } = authClient.useSession();
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [tokenUserId, setTokenUserId] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
 
@@ -69,6 +70,7 @@ export function AppShell({ children }: AppShellProps) {
         .then((token) => {
           if (cancelled) return;
           setAccessToken(token);
+          setTokenUserId(session.user.id);
           setTokenError(null);
         })
         .catch((err) => {
@@ -110,11 +112,11 @@ export function AppShell({ children }: AppShellProps) {
     );
   }
 
-  if (!accessToken) return <Interlude>Tuning up…</Interlude>;
+  if (!accessToken || tokenUserId !== session.user.id) return <Interlude>Tuning up…</Interlude>;
 
   return (
     <SpotifyPlayerProvider accessToken={accessToken}>
-      <LibraryProvider accessToken={accessToken}>
+      <LibraryProvider key={session.user.id} accessToken={accessToken} userId={session.user.id}>
         <NavSearchContext.Provider value={{ query, setQuery }}>
           <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
             <div className="absolute -top-[30%] -right-[15%] h-[80vw] w-[80vw] opacity-55 blur-[20px] transition-[background] duration-700 [background:radial-gradient(closest-side,var(--room),transparent_70%)]" />

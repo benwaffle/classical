@@ -56,12 +56,14 @@ function formatMs(ms: number): string {
 
 export function LibraryProvider({
   accessToken,
+  userId,
   children,
 }: {
   accessToken: string;
+  userId: string;
   children: ReactNode;
 }) {
-  const { tracks, loading, refreshing, error, total } = useLikedSongs(accessToken);
+  const { tracks, loading, refreshing, error, total } = useLikedSongs(accessToken, userId);
   const [works, setWorks] = useState<LibraryWork[]>([]);
   const [extra, setExtra] = useState<LibraryWork[]>([]);
   // Optimistic overrides so a heart responds before Spotify confirms.

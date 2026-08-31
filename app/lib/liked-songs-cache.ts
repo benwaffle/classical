@@ -1,19 +1,27 @@
 import type { SavedTrack } from '@spotify/web-api-ts-sdk';
 
-const DB_NAME = 'SpotifyCache';
 const DB_VERSION = 2;
 const STORE_NAME = 'likedSongs';
 const META_STORE = 'metadata';
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+let legacyCleanupStarted = false;
+
+export function likedSongsDatabaseName(userId: string) {
+  return `SpotifyCache:${userId}`;
+}
 
 export interface CachedLikedSongs {
   tracks: SavedTrack[];
   isStale: boolean;
 }
 
-function openDB(): Promise<IDBDatabase> {
+function openDB(userId: string): Promise<IDBDatabase> {
+  if (!legacyCleanupStarted) {
+    legacyCleanupStarted = true;
+    indexedDB.deleteDatabase('SpotifyCache');
+  }
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(likedSongsDatabaseName(userId), DB_VERSION);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
     request.onupgradeneeded = (event) => {
@@ -31,9 +39,9 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-export async function getCachedLikedSongs(): Promise<CachedLikedSongs | null> {
+export async function getCachedLikedSongs(userId: string): Promise<CachedLikedSongs | null> {
   try {
-    const db = await openDB();
+    const db = await openDB(userId);
 
     const metaTx = db.transaction(META_STORE, 'readonly');
     const metaStore = metaTx.objectStore(META_STORE);
@@ -68,9 +76,9 @@ export async function getCachedLikedSongs(): Promise<CachedLikedSongs | null> {
   }
 }
 
-export async function setCachedLikedSongs(tracks: SavedTrack[]): Promise<void> {
+export async function setCachedLikedSongs(userId: string, tracks: SavedTrack[]): Promise<void> {
   try {
-    const db = await openDB();
+    const db = await openDB(userId);
     const tx = db.transaction([STORE_NAME, META_STORE], 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     const metaStore = tx.objectStore(META_STORE);
@@ -85,9 +93,9 @@ export async function setCachedLikedSongs(tracks: SavedTrack[]): Promise<void> {
   }
 }
 
-export async function clearLikedSongsCache(): Promise<void> {
+export async function clearLikedSongsCache(userId: string): Promise<void> {
   try {
-    const db = await openDB();
+    const db = await openDB(userId);
     const tx = db.transaction([STORE_NAME, META_STORE], 'readwrite');
     tx.objectStore(STORE_NAME).clear();
     tx.objectStore(META_STORE).delete('lastFetch');

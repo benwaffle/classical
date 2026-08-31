@@ -88,6 +88,7 @@ export function PlayerBar() {
           uri: currentTrack.uri,
         },
       ],
+      unmatched: true,
       addedAt: null,
     };
   }, [located, currentTrack, likedTrackIds]);

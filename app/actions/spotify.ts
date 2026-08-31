@@ -18,6 +18,7 @@ import { headers } from 'next/headers';
 import { after } from 'next/server';
 import { and, inArray, eq, sql } from 'drizzle-orm';
 import { enqueueAlbumsForTracks } from '@/lib/match-queue-processor';
+import { checkAuth } from '@/app/admin/actions/auth';
 
 export async function getSpotifyToken(): Promise<string> {
   const session = await auth.api.getSession({
@@ -202,6 +203,7 @@ export async function getMatchQueue(
   limit = 50,
   offset = 0,
 ): Promise<{ items: { spotifyId: string; submittedAt: Date; status: string }[]; total: number }> {
+  await checkAuth();
   const [countResult, results] = await Promise.all([
     db
       .select({ count: sql<number>`count(*)` })
@@ -230,6 +232,7 @@ export async function updateMatchQueueStatus(
   trackIds: string[],
   status: 'matched' | 'failed',
 ): Promise<void> {
+  await checkAuth();
   if (trackIds.length === 0) return;
 
   await db

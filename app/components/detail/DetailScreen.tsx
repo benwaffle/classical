@@ -204,6 +204,11 @@ function Hero({
           <h2 className="mb-3 font-meta text-[10.5px] font-semibold tracking-[0.22em] text-muted uppercase">
             Programme
           </h2>
+          {work.unmatched && (
+            <p className="mb-3 border border-rule bg-paper-2 px-3 py-2 font-display text-[13px] text-muted italic">
+              This recording’s tracks have not been mapped to movements yet.
+            </p>
+          )}
           <ol className="m-0 flex list-none flex-col p-0">
             {work.movements.map((m) => {
               const playing = m.trackId !== null && currentTrackId === m.trackId;
@@ -355,7 +360,7 @@ function OtherRecordings({ workId, others }: { workId: number; others: OtherReco
               {[r.year, r.album].filter(Boolean).join(' · ')}
             </div>
             <div className="mt-px font-meta text-[10.5px] text-muted tabular-nums">
-              {r.duration}
+              {r.unmatched ? 'tracks not mapped' : (r.duration ?? '—')}
             </div>
           </Link>
         ))}
