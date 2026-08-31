@@ -44,3 +44,6 @@ package-lock.json
 # claude code — launch.json is shared, the rest is per-machine
 .claude/*
 !.claude/launch.json
+
+# local DB snapshots taken before prod mutations (see AGENTS.md)
+backups/
