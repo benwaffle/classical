@@ -23,7 +23,6 @@ import {
   lifespan,
   pickImage,
   playable,
-  roman,
   shortName,
   surname,
   tintFor,
@@ -307,14 +306,13 @@ function labelMovement(
 ): { numeral: string; name: string; unnamed: boolean } {
   const titles = parts.map((p) => p.partTitle?.trim()).filter((t): t is string => Boolean(t));
   const label = parts[0].partLabel?.trim() ?? '';
-  const position = parts[0].partPosition;
 
   // The numeral column is 22px wide — sized for "VIII.", not "No. 3.", which
   // wraps. Reduce a numeral-ish label to just its number.
   const compact = label.match(/^(?:nos?\.?\s*)?([ivxlcdm]+|\d+)\s*\.?$/i)?.[1] ?? '';
 
   if (titles.length > 0) {
-    return { numeral: compact || roman(position), name: titles.join(' / '), unnamed: false };
+    return { numeral: compact, name: titles.join(' / '), unnamed: false };
   }
   if (label) {
     return { numeral: '', name: label, unnamed: false };
@@ -324,7 +322,7 @@ function labelMovement(
    * read as real metadata; show Spotify's own track title instead and flag it,
    * so the screen says out loud that the parser got nothing here.
    */
-  return { numeral: roman(position), name: trackTitle, unnamed: true };
+  return { numeral: '', name: trackTitle, unnamed: true };
 }
 
 /** workId -> every part of that work, so we can see what a recording lacks. */

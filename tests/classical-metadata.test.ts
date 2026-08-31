@@ -4,6 +4,7 @@ import {
   formatWorkPart,
   normalizeCatalogNumber,
   normalizeCatalogSystem,
+  possiblePartDuplicateKey,
   toRoman,
 } from '../app/lib/classical-normalization';
 import {
@@ -16,6 +17,14 @@ import { likedSongsDatabaseName } from '../app/lib/liked-songs-cache';
 test('normalizes catalog punctuation without changing display data', () => {
   assert.equal(normalizeCatalogSystem('K.'), normalizeCatalogSystem(' K '));
   assert.equal(normalizeCatalogNumber('6 No. 4'), normalizeCatalogNumber('6 No.4'));
+});
+
+test('flags punctuation and numeral variants as possible duplicate parts', () => {
+  assert.equal(
+    possiblePartDuplicateKey('VII', "July. The Reaper's Song"),
+    possiblePartDuplicateKey('7', 'July: Reaper’s Song'),
+  );
+  assert.equal(possiblePartDuplicateKey(null, null), '');
 });
 
 test('renders stored labels and titles exactly once', () => {

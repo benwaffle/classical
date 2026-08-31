@@ -13,7 +13,9 @@ The production metadata is structurally valid only when all of the following hol
 - split movements may link one part to multiple tracks; and
 - every stored unlinked track is explicitly terminal `not_classical` rather than silently unexplained.
 
-`pnpm metadata:validate` reports and enforces these structural invariants. A nonzero `needsReview` count is reported but is not itself a structural failure: review flags represent semantic uncertainty that was preserved instead of overwritten.
+`pnpm metadata:validate` is both the structural validator and metadata audit. Its output separates `hardInvariants` from the non-failing `reviewBacklog`. A nonzero `needsReview` count is reported but is not itself a structural failure: review flags represent semantic uncertainty that was preserved instead of overwritten.
+
+The default human-readable report includes counts plus five representative rows for each nonempty backlog or violation. Use `pnpm metadata:validate --details` for complete affected-row lists. For automation, `pnpm --silent metadata:validate --json` emits strict summary JSON; add `--details` when the consumer also needs every affected ID and duplicate-candidate group.
 
 ## Meaning of review status
 
@@ -30,22 +32,23 @@ Do not clear review status in bulk merely to reach zero. Resolve the underlying 
 
 ## Production snapshot
 
-As of 2026-08-30 after the Zimmer/Tchaikovsky/Beethoven cleanup:
+As of 2026-08-30 after the popularity backfill and restored Zimmer exclusion:
 
-| Metric                                                                | Count |
-| --------------------------------------------------------------------- | ----: |
-| Stored Spotify tracks                                                 | 9,960 |
-| Tracks with canonical part links                                      | 9,672 |
-| Track-to-part links                                                   | 9,959 |
-| Intentionally unlinked Zimmer tracks newly classified `not_classical` |   288 |
-| Queue `matched`                                                       | 9,224 |
-| Queue `not_classical`                                                 |   394 |
-| `needs_review` links                                                  |   170 |
-| Part links without recordings                                         |     0 |
-| Recording members without parts                                       |     0 |
-| Cross-work links                                                      |     0 |
-| Duplicate work-part positions                                         |     0 |
-| Unclassified unlinked stored tracks                                   |     0 |
+| Metric                                    | Count |
+| ----------------------------------------- | ----: |
+| Stored Spotify tracks                     | 9,960 |
+| Tracks with canonical part links          | 9,699 |
+| Track-to-part links                       | 9,992 |
+| Queue `matched`                           | 9,251 |
+| Queue `not_classical`                     |   315 |
+| `needs_review` links                      |   175 |
+| Recordings with member-derived popularity | 4,515 |
+| Empty, explicitly unranked recordings     |    77 |
+| Part links without recordings             |     0 |
+| Recording members without parts           |     0 |
+| Cross-work links                          |     0 |
+| Duplicate work-part positions             |     0 |
+| Unclassified unlinked stored tracks       |     0 |
 
 This table is an operational snapshot, not a test fixture. Counts will change as albums are added or review items are repaired; the zero-valued invariant rows should remain zero.
 
@@ -56,6 +59,8 @@ This table is an operational snapshot, not a test fixture. Counts will change as
 - Tchaikovsky’s String Quartet No. 1 (`Op. 11`) has one canonical work identity.
 - Beethoven’s Ninth (`Op. 125`) has one canonical work identity. Title variants for movements I–IV share canonical parts; explicitly labeled finale subdivisions such as `IVa-b` and `IVc-j` remain separate flat parts.
 - Roman numerals are stored labels, not generated from `position`. This prevents duplicated or misleading display numerals.
+- `recording_v2.popularity` is the rounded mean of the recording members’ cached Spotify track popularity. Ingestion refreshes it whenever membership changes. Empty recordings remain null and are visibly unranked.
+- Queue submission and retry logic preserve terminal `not_classical` rows. On 2026-08-30, 257 unlinked Hans Zimmer rows that had regressed to `pending` were restored to `not_classical`.
 
 Material work merges/removals should be recorded in `metadata_migration_audit` with a reason.
 

@@ -14,6 +14,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { upsertWork } from '@/app/admin/actions/spotify-utils';
 import { toRoman } from '@/lib/classical-normalization';
 import { ensureWorkCatalogV2 } from '@/lib/work-parts-v2';
+import { refreshRecordingPopularity } from '@/lib/recording-popularity';
 
 export interface TrackMetadataSaveInput {
   preserveExistingWork?: boolean;
@@ -219,6 +220,14 @@ export async function saveTrackMetadataInternal(
       .values({ spotifyAlbumId: album.id, workId, popularity: null })
       .returning({ id: recordingV2.id });
   }
+  const [previousMembership] = await database
+    .select({ recordingId: recordingTrackV2.recordingId })
+    .from(recordingTrackV2)
+    .where(eq(recordingTrackV2.spotifyTrackId, track.id))
+    .limit(1);
+  if (previousMembership && previousMembership.recordingId !== recordingRow.id) {
+    await database.delete(recordingTrackV2).where(eq(recordingTrackV2.spotifyTrackId, track.id));
+  }
   await database
     .insert(recordingTrackV2)
     .values({
@@ -226,6 +235,11 @@ export async function saveTrackMetadataInternal(
       spotifyTrackId: track.id,
     })
     .onConflictDoNothing();
+  await Promise.all(
+    [recordingRow.id, previousMembership?.recordingId]
+      .filter((id): id is number => id !== undefined)
+      .map((id) => refreshRecordingPopularity(id, database)),
+  );
   await database.delete(trackWorkPartV2).where(eq(trackWorkPartV2.spotifyTrackId, track.id));
   await database.insert(trackWorkPartV2).values({
     spotifyTrackId: track.id,

@@ -53,17 +53,14 @@ visible. Preferring the better of two _real_ values (the fullest recording of a
 work, the credited artist when the composer is the only artist) is fine — that's
 a choice between things we actually know.
 
-Known gaps as of 2026-08-30, all of which the UI should surface rather than mask:
-
-| Gap                                                                                                                                                                         | Extent                                                                |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `recording_v2.popularity` unpopulated                                                                                                                                       | 4924 of 4924 — every "sort by popularity" surface is really unordered |
-| recordings with no tracks mapped to movements                                                                                                                               | 291                                                                   |
-| `work_part_v2` rows with neither label nor title                                                                                                                            | 261                                                                   |
-| works with duplicate parts — the same movement matched twice under different punctuation, e.g. work 1008 has both `VII July. The Reaper's Song` and `7 July: Reaper's Song` | 186 works, 264 redundant rows                                         |
-| composers with no `birth_year` (so no derived era)                                                                                                                          | 290 of 651                                                            |
-| works with no `form` (so no catalogue genre)                                                                                                                                | 109                                                                   |
-| duplicate works                                                                                                                                                             | e.g. Tchaikovsky's Nutcracker as both `Op 71` and `Op 71 (TH 14)`     |
+Run `pnpm metadata:validate` to measure data quality instead of keeping changing
+counts in this file. Its `hardInvariants` section must be clean. Its non-failing
+`reviewBacklog` section tracks empty recordings, unnamed parts, missing composer
+birth years, missing work forms, and conservative duplicate-part/work candidates.
+Review backlog is not an instruction to guess values or merge identities
+automatically. The default output includes representative affected IDs; use
+`pnpm metadata:validate --details` for complete lists or
+`pnpm --silent metadata:validate --json` for machine-readable output.
 
 ## Tools
 

@@ -49,3 +49,29 @@ export function formatWorkPart(label: string | null, title: string | null) {
   if (label && title) return `${label}. ${title}`;
   return title ?? (label ? `${label}.` : '');
 }
+
+function romanToInteger(value: string): number | null {
+  if (!/^[ivxlcdm]+$/i.test(value)) return null;
+  const values: Record<string, number> = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+  let total = 0;
+  let previous = 0;
+  for (const character of [...value.toLowerCase()].reverse()) {
+    const current = values[character];
+    total += current < previous ? -current : current;
+    previous = current;
+  }
+  return total;
+}
+
+/**
+ * A deliberately review-only key for finding likely duplicate movement rows.
+ * It bridges display punctuation, Roman/Arabic numbering, and a leading English
+ * article, but is never used to merge metadata automatically.
+ */
+export function possiblePartDuplicateKey(label: string | null, title: string | null) {
+  const tokens = normalizeMetadataText([label, title].filter(Boolean).join(' ')).split(' ');
+  if (tokens.length === 0 || !tokens[0]) return '';
+  const number = romanToInteger(tokens[0]);
+  if (number !== null) tokens[0] = String(number);
+  return tokens.filter((token, index) => index === 0 || token !== 'the').join(' ');
+}

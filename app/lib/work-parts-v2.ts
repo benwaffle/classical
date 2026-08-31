@@ -18,6 +18,7 @@ import {
 import type { ClassicalMetadataV2 } from '@/lib/classical-parser';
 import { collapseCartesianPartAssignments, selectRecordingMatch } from '@/lib/recording-matching';
 import { candidateIsSpecificEnough, titlesAreCompatible } from '@/lib/metadata-matching';
+import { refreshRecordingPopularity } from '@/lib/recording-popularity';
 
 export type V2TrackInput = {
   id: string;
@@ -317,6 +318,13 @@ async function reconcileRecording(
       .returning({ id: recordingV2.id });
     recordingId = created.id;
   }
+  const previousMemberships =
+    trackIds.length > 0
+      ? await database
+          .select({ recordingId: recordingTrackV2.recordingId })
+          .from(recordingTrackV2)
+          .where(inArray(recordingTrackV2.spotifyTrackId, trackIds))
+      : [];
   await database.delete(recordingTrackV2).where(eq(recordingTrackV2.recordingId, recordingId));
   if (trackIds.length > 0) {
     await database
@@ -329,6 +337,11 @@ async function reconcileRecording(
       })),
     );
   }
+  await Promise.all(
+    [...new Set([recordingId, ...previousMemberships.map((row) => row.recordingId)])].map((id) =>
+      refreshRecordingPopularity(id, database),
+    ),
+  );
   return recordingId;
 }
 
